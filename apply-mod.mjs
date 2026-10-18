@@ -96,6 +96,7 @@ function patchMainBundle(src) {
 
   const replacementIse = [
     "Ise=e=>{",
+    "window.__oc_app_ext=e;",
     "let t=Re(()=>G(()=>import(`./panel-c7bWJg2T.js`),__vite__mapDeps([28,17,18,29,30]),import.meta.url));",
     "A(NI(()=>void t.preload()));",
     "G(()=>import(`./panel-c7bWJg2T.js`),__vite__mapDeps([28,17,18,29,30]),import.meta.url).then(m=>m.initCompanion?.(e));",
@@ -136,7 +137,7 @@ function patchSessionRouteBundle(src) {
 
   // 2. Expose timeline controller `p=mv(t)` on `window.__oc_timeline_ctrl` for virtual-scroll navigation
   if (out.includes("p=mv(t),m=Sv(")) {
-    out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_timeline_ctrl=mv(t)),m=Sv(");
+    out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_timeline_ctrl=mv(t)),(window.__oc_current_session=t),m=Sv(");
   } else {
     throw new Error("Could not locate p=mv(t),m=Sv( in route bundle.");
   }
@@ -155,35 +156,53 @@ function patchSessionRouteBundle(src) {
   // 4. Inject "Branch to new chat" (分支到新聊天) button next to copy button in assistant response footer
   const declTarget = "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))};";
   const declInject = [
-    "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))},",
-    "[__oc_fk_l,__oc_set_fk_l]=en(!1),",
-    "__oc_fork=async()=>{",
+    "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))};",
+    "let _oc_sdk,_oc_srv,_oc_st,_oc_nav,_oc_prm;",
+    "try{_oc_sdk=nt()}catch(e){}",
+    "try{_oc_srv=pt()}catch(e){}",
+    "try{_oc_st=Jn()}catch(e){}",
+    "try{_oc_nav=xn()}catch(e){}",
+    "try{_oc_prm=Nn()}catch(e){}",
+    "let [__oc_fk_l,__oc_set_fk_l]=en(!1),",
+    "__oc_fork=async(evt)=>{",
+    "if(evt){evt.preventDefault?.();evt.stopPropagation?.()}",
     "if(__oc_fk_l())return;",
-    "let sId=Nn()?.id||e.message?.sessionID;if(!sId)return;",
+    "let sId=_oc_prm?.id||window.__oc_current_session?.identity?.sessionID?.()||window.__oc_current_session?.identity?.params?.id||window.__oc_timeline_ctrl?.sessionID?.()||window.__oc_app_ext?.sessions?.current?.()?.id;",
+    "if(!sId){",
+    "Ot({title:n.t('common.requestFailed')||'请求失败',description:'未找到当前会话ID'});",
+    "return;",
+    "}",
     "__oc_set_fk_l(!0);",
     "try{",
-    "let sdk=nt(),srv=pt(),st=Jn(),nav=xn(),msgs=st.session.message.list(sId)||[];",
+    "let sdk=_oc_sdk||window.__oc_app_ext?.sdk;",
+    "let srv=_oc_srv;",
+    "let st=_oc_st;",
+    "let nav=_oc_nav;",
+    "let srvKey=srv?.key||window.__oc_current_session?.identity?.params?.serverKey||'local';",
+    "if(!sdk?.api?.session?.fork)throw new Error('Fork API 未就绪');",
+    "let msgs=st?.session?.message?.list?.(sId)||[];",
     "let cIdx=msgs.findIndex(m=>m.id===e.message.id);",
     "let bId=void 0;",
     "if(cIdx!==-1){let nu=msgs.slice(cIdx+1).find(m=>m.type==='user');nu&&(bId=nu.id)}",
     "let fk=await sdk.api.session.fork({sessionID:sId,before:bId});",
     "if(fk?.id){",
-    "let curS=st.session.get(sId),isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';",
+    "let curS=st?.session?.get?.(sId)||window.__oc_current_session?.data?.info?.();",
+    "let isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';",
     "let rawT=curS?.title||(isZh?'新会话':'New Session');",
     "let clnT=rawT.replace(/\\s*\\((?:分支(?:\\s*\\d+)?|branch(?:\\s*\\d+)?|fork(?:\\s*#?\\d+)?)\\)$/i,'').trim();",
-    "let allS=st.session.list()||[];",
+    "let allS=st?.session?.list?.()||[];",
     "let esc=clnT.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&');",
     "let bRe=new RegExp('^'+esc+' \\\\('+tag+'(?: (\\\\d+))?\\\\)$'),has1=!1,maxN=1;",
     "for(let s of allS){if(!s?.title)continue;let m=s.title.match(bRe);m&&(m[1]===void 0?has1=!0:(maxN=Math.max(maxN,parseInt(m[1],10))))}",
     "let nTitle=!has1?(clnT+' ('+tag+')'):(clnT+' ('+tag+' '+(maxN+1)+')');",
     "await sdk.api.session.update({sessionID:fk.id,title:nTitle}).catch(()=>{});",
     "fk.title=nTitle;",
-    "st.session.remember(fk);",
-    "nav(M(srv.key,fk.id));",
+    "st?.session?.remember?.(fk);",
+    "if(nav){nav(M(srvKey,fk.id))}else{window.location.hash=M(srvKey,fk.id)}",
     "}",
     "}catch(err){",
     "let msg=err instanceof Error?err.message:String(err);",
-    "Ot({title:n.t('common.requestFailed'),description:msg});",
+    "Ot({title:n.t('common.requestFailed')||'请求失败',description:msg});",
     "}finally{",
     "__oc_set_fk_l(!1);",
     "}",
@@ -207,7 +226,7 @@ function patchSessionRouteBundle(src) {
   ].join("");
 
   if (out.includes(declTarget) && out.includes(jsxTarget)) {
-    out = out.replace(declTarget, declInject).replace(jsxTarget, jsxInject);
+    out = out.replace(declTarget, () => declInject).replace(jsxTarget, () => jsxInject);
   } else {
     throw new Error("Could not locate assistant message copy footer in route bundle.");
   }
