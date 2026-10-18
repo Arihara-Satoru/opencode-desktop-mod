@@ -432,12 +432,123 @@ const COMPANION_CSS = `
   background: var(--v2-background-bg-layer-01, #1f1f23);
 }
 
+.oc-btw-composer.is-dragover {
+  outline: 1.5px dashed var(--v2-border-border-focus, #3b82f6);
+  outline-offset: -2px;
+}
+
 .oc-btw-quotes-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   padding: 10px 12px 2px 12px;
   box-sizing: border-box;
+}
+
+.oc-btw-draft-img-card {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  border: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.18));
+  background: var(--v2-background-bg-layer-02, rgba(128, 128, 128, 0.08));
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.oc-btw-draft-img-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 7px;
+  display: block;
+  cursor: zoom-in;
+}
+
+.oc-btw-draft-img-rm {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--v2-background-bg-base, #ffffff);
+  background: var(--v2-icon-icon-muted, #52525b);
+  color: var(--v2-icon-icon-contrast, #ffffff);
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.oc-btw-draft-img-rm:hover {
+  background: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--v2-text-text-muted, #71717a);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.oc-btw-attach-btn:hover {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.1));
+  color: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 90%;
+}
+
+.oc-btw-msg-img {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 8px;
+  border: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.16));
+  object-fit: cover;
+  cursor: zoom-in;
+  display: block;
+}
+
+.oc-btw-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;
+  animation: oc-pop-in 0.12s ease-out;
+}
+
+.oc-btw-lightbox img {
+  max-width: min(92vw, 1200px);
+  max-height: 88vh;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  object-fit: contain;
 }
 
 .oc-btw-draft-quote {
@@ -749,8 +860,128 @@ function createDefaultThread() {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     quotes: [],
+    images: [],
     messages: [],
   };
+}
+
+const ALLOWED_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function openImageLightbox(src) {
+  if (!src || typeof document === "undefined") return;
+  const overlay = document.createElement("div");
+  overlay.className = "oc-btw-lightbox";
+  const img = document.createElement("img");
+  img.src = src;
+  overlay.appendChild(img);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", close);
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      close();
+      window.removeEventListener("keydown", onKey);
+    }
+  };
+  window.addEventListener("keydown", onKey);
+  document.body.appendChild(overlay);
+}
+
+function createCompressedPreviewUrl(dataUrl) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 360;
+          const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+          const w = Math.max(1, Math.round((img.width || 1) * scale));
+          const h = Math.max(1, Math.round((img.height || 1) * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/webp", 0.78));
+        } catch {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch {
+      resolve(dataUrl);
+    }
+  });
+}
+
+function readImageFileAsAttachment(file) {
+  return new Promise((resolve) => {
+    if (!file) return resolve(null);
+    let mime = (file.type || "").split(";")[0].trim().toLowerCase();
+    if (!ALLOWED_IMAGE_MIMES.has(mime)) {
+      const ext = (file.name || "").split(".").pop()?.toLowerCase();
+      if (ext === "png") mime = "image/png";
+      else if (ext === "jpg" || ext === "jpeg") mime = "image/jpeg";
+      else if (ext === "webp") mime = "image/webp";
+      else if (ext === "gif") mime = "image/gif";
+    }
+    if (!ALLOWED_IMAGE_MIMES.has(mime)) return resolve(null);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      const commaIdx = dataUrl.indexOf(",");
+      if (commaIdx < 0) return resolve(null);
+      const base64Data = dataUrl.slice(commaIdx + 1);
+      const previewUrl = await createCompressedPreviewUrl(dataUrl);
+      resolve({
+        id: crypto.randomUUID(),
+        name: file.name || `image-${Date.now()}.png`,
+        mime,
+        data: base64Data,
+        dataUrl,
+        previewUrl,
+      });
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+function persistBtwStateSafely(sessionID, stateObj) {
+  try {
+    localStorage.setItem(SESSION_PREFIX + sessionID, JSON.stringify(stateObj));
+  } catch {
+    // If raw base64 images exceed localStorage quota, store lightweight previewUrl thumbnails
+    try {
+      const compact = {
+        ...stateObj,
+        threads: (stateObj.threads || []).map((t) => ({
+          ...t,
+          images: (t.images || []).map((img) => ({
+            id: img.id,
+            name: img.name,
+            mime: img.mime,
+            previewUrl: img.previewUrl,
+          })),
+          messages: (t.messages || []).map((m) =>
+            Array.isArray(m.images) && m.images.length > 0
+              ? {
+                  ...m,
+                  images: m.images.map((img) => ({
+                    id: img.id,
+                    name: img.name,
+                    mime: img.mime,
+                    previewUrl: img.previewUrl || img.dataUrl,
+                  })),
+                }
+              : m
+          ),
+        })),
+      };
+      localStorage.setItem(SESSION_PREFIX + sessionID, JSON.stringify(compact));
+    } catch {}
+  }
 }
 
 function getSessionBtwStore(sessionID, legacyChatsAccessor) {
@@ -818,9 +1049,7 @@ function getSessionBtwStore(sessionID, legacyChatsAccessor) {
   const setState = (updater) => {
     const next = typeof updater === "function" ? updater(state()) : updater;
     rawSetState(next);
-    try {
-      localStorage.setItem(SESSION_PREFIX + sessionID, JSON.stringify(next));
-    } catch {}
+    persistBtwStateSafely(sessionID, next);
   };
 
   const entry = { state, setState };
@@ -919,7 +1148,7 @@ const SYSTEM_INSTRUCTION = [
   "不要调用任何工具，也不要试图修改工作区文件。",
 ].join(" ");
 
-async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAccessor }) {
+async function sendBtwMessage({ session, threadId, text, quotes, images, legacyChatsAccessor }) {
   if (!session?.id) return;
   const trimmed = (text || "").trim();
   const store = getSessionBtwStore(session.id, legacyChatsAccessor);
@@ -928,9 +1157,11 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
   if (!thread) return;
 
   const attachedQuotes = quotes ?? thread.quotes ?? [];
-  if (!trimmed && attachedQuotes.length === 0) return;
+  const attachedImages = images ?? thread.images ?? [];
+  if (!trimmed && attachedQuotes.length === 0 && attachedImages.length === 0) return;
 
-  const finalUserText = trimmed || "请解释这段引用内容。";
+  const finalUserText =
+    trimmed || (attachedImages.length > 0 ? "请结合图片回答或分析图中内容。" : "请解释这段引用内容。");
   const prefs = globalPrefs();
   const resolvedModel = resolveSelectedModel(session, prefs.modelKey);
   const modelLabel = resolvedModel ? resolvedModel.id : "默认模型";
@@ -941,6 +1172,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
     role: "user",
     text: finalUserText,
     quotes: attachedQuotes,
+    images: attachedImages,
     createdAt: Date.now(),
   };
 
@@ -997,6 +1229,33 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
   promptParts.push(`${currentQuotesBlock}用户问题：\n${finalUserText}`);
   const assembledPrompt = promptParts.join("\n\n");
 
+  // Collect inline image attachments (current turn images, or recent turn images in this thread for follow-up questions)
+  const extractBase64 = (img) => {
+    if (img?.data) return img.data;
+    const url = img?.dataUrl || img?.previewUrl || "";
+    const idx = url.indexOf(",");
+    return idx >= 0 ? url.slice(idx + 1) : "";
+  };
+  const candidateImages =
+    attachedImages.length > 0
+      ? attachedImages
+      : thread.messages
+          .filter((m) => m.role === "user" && Array.isArray(m.images) && m.images.length > 0)
+          .slice(-1)
+          .flatMap((m) => m.images);
+  const promptFiles = candidateImages
+    .map((img) => {
+      const b64 = extractBase64(img);
+      if (!b64) return null;
+      return {
+        data: b64,
+        mime: img.mime || "image/png",
+        source: { type: "inline" },
+        name: img.name || "image.png",
+      };
+    })
+    .filter(Boolean);
+
   const isFirstMessage = thread.messages.length === 0;
   const nextTitle = isFirstMessage ? finalUserText.replace(/\s+/g, " ").slice(0, 22) : thread.title;
 
@@ -1010,6 +1269,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
             title: nextTitle,
             updatedAt: Date.now(),
             quotes: [],
+            images: [],
             messages: [...t.messages, userMsg, assistantMsg],
           }
         : t
@@ -1176,6 +1436,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
           {
             sessionID: tempSessionId,
             text: assembledPrompt,
+            files: promptFiles.length > 0 ? promptFiles : undefined,
           },
           reqOptions
         );
@@ -1376,6 +1637,7 @@ function BtwPanel(props) {
 
   const activeMessages = createMemo(() => activeThread()?.messages || []);
   const draftQuotes = createMemo(() => activeThread()?.quotes || []);
+  const draftImages = createMemo(() => activeThread()?.images || []);
   const isThreadGenerating = createMemo(() => {
     streamActivityTick();
     return activeMessages().some((m) => {
@@ -1383,6 +1645,22 @@ function BtwPanel(props) {
       return live ? live.pending || live.streaming : m.pending;
     });
   });
+
+  const attachImageFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return false;
+    const loaded = (await Promise.all(files.map((f) => readImageFileAsAttachment(f)))).filter(Boolean);
+    if (loaded.length === 0) return false;
+    const curT = activeThread();
+    if (!curT) return false;
+    storeMemo().setState((prev) => ({
+      ...prev,
+      threads: prev.threads.map((t) =>
+        t.id === curT.id ? { ...t, images: [...(t.images || []), ...loaded] } : t
+      ),
+    }));
+    return true;
+  };
 
   const [inputValue, setInputValue] = createSignal("");
   const [copiedId, setCopiedId] = createSignal("");
@@ -1614,6 +1892,23 @@ function BtwPanel(props) {
           userWrap.setAttribute("data-component", "user-message");
           userWrap.className = "flex flex-col items-end gap-1.5 w-full";
 
+          if (Array.isArray(msg.images) && msg.images.length > 0) {
+            const imgContainer = document.createElement("div");
+            imgContainer.className = "oc-btw-msg-images";
+            for (const imgItem of msg.images) {
+              const src = imgItem.dataUrl || imgItem.previewUrl || (imgItem.data ? `data:${imgItem.mime || "image/png"};base64,${imgItem.data}` : "");
+              if (!src) continue;
+              const imgEl = document.createElement("img");
+              imgEl.className = "oc-btw-msg-img";
+              imgEl.src = src;
+              imgEl.alt = imgItem.name || "image";
+              imgEl.title = "点击查看大图";
+              imgEl.addEventListener("click", () => openImageLightbox(src));
+              imgContainer.appendChild(imgEl);
+            }
+            userWrap.appendChild(imgContainer);
+          }
+
           if (Array.isArray(msg.quotes) && msg.quotes.length > 0) {
             const qContainer = document.createElement("div");
             qContainer.className = "flex flex-col items-end gap-1 w-full";
@@ -1814,12 +2109,27 @@ function BtwPanel(props) {
       threadId: curT.id,
       text: prevUser.text,
       quotes: prevUser.quotes || [],
+      images: prevUser.images || [],
     });
   }
 
   // --- 3. Bottom Composer Dock (Identical to OpenCode Native Composer Dock) ---
   const composerDock = document.createElement("div");
   composerDock.className = "oc-btw-composer-dock";
+
+  const hiddenFileInput = document.createElement("input");
+  hiddenFileInput.type = "file";
+  hiddenFileInput.accept = "image/png,image/jpeg,image/webp,image/gif";
+  hiddenFileInput.multiple = true;
+  hiddenFileInput.style.display = "none";
+  hiddenFileInput.addEventListener("change", async () => {
+    if (hiddenFileInput.files?.length) {
+      await attachImageFiles(hiddenFileInput.files);
+      hiddenFileInput.value = "";
+      requestAnimationFrame(() => textarea.focus());
+    }
+  });
+  composerDock.appendChild(hiddenFileInput);
 
   const composerForm = document.createElement("form");
   composerForm.setAttribute("data-component", "composer");
@@ -1829,13 +2139,66 @@ function BtwPanel(props) {
     handleSendOrStop();
   });
 
-  // 3a. Attached Quotes inside top of Composer Card
+  composerForm.addEventListener("dragover", (e) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      composerForm.classList.add("is-dragover");
+    }
+  });
+  composerForm.addEventListener("dragleave", (e) => {
+    if (!composerForm.contains(e.relatedTarget)) {
+      composerForm.classList.remove("is-dragover");
+    }
+  });
+  composerForm.addEventListener("drop", async (e) => {
+    composerForm.classList.remove("is-dragover");
+    if (e.dataTransfer?.files?.length) {
+      e.preventDefault();
+      e.stopPropagation();
+      const added = await attachImageFiles(e.dataTransfer.files);
+      if (added) requestAnimationFrame(() => textarea.focus());
+    }
+  });
+
+  // 3a. Attached Images & Quotes inside top of Composer Card
   const quotesRow = document.createElement("div");
   quotesRow.className = "oc-btw-quotes-row";
   createEffect(() => {
     const quotes = draftQuotes();
-    quotesRow.style.display = quotes.length > 0 ? "flex" : "none";
+    const images = draftImages();
+    quotesRow.style.display = quotes.length > 0 || images.length > 0 ? "flex" : "none";
     quotesRow.innerHTML = "";
+
+    for (const img of images) {
+      const card = document.createElement("div");
+      card.className = "oc-btw-draft-img-card";
+      const src = img.previewUrl || img.dataUrl || (img.data ? `data:${img.mime || "image/png"};base64,${img.data}` : "");
+      const thumb = document.createElement("img");
+      thumb.src = src;
+      thumb.alt = img.name || "image";
+      thumb.title = `${img.name || "图片"} (点击预览)`;
+      thumb.addEventListener("click", () => openImageLightbox(img.dataUrl || src));
+
+      const rmBtn = document.createElement("button");
+      rmBtn.type = "button";
+      rmBtn.className = "oc-btw-draft-img-rm";
+      rmBtn.textContent = "×";
+      rmBtn.title = "移除图片";
+      rmBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const curT = activeThread();
+        storeMemo().setState((prev) => ({
+          ...prev,
+          threads: prev.threads.map((t) =>
+            t.id === curT.id ? { ...t, images: (t.images || []).filter((i) => i.id !== img.id) } : t
+          ),
+        }));
+      });
+
+      card.append(thumb, rmBtn);
+      quotesRow.appendChild(card);
+    }
+
     for (const q of quotes) {
       const pill = document.createElement("div");
       pill.className = "oc-btw-draft-quote";
@@ -1863,10 +2226,10 @@ function BtwPanel(props) {
     }
   });
 
-  // 3b. Textarea Editor (No browser border, no resize grip)
+  // 3b. Textarea Editor (Supports Ctrl+V image paste, no browser border, no resize grip)
   const textarea = document.createElement("textarea");
   textarea.rows = 2;
-  textarea.placeholder = "随便问点什么，选中左侧文字可引用…";
+  textarea.placeholder = "随便问点什么，支持粘贴图片或选中左侧文字引用…";
   textarea.className = "oc-btw-textarea";
 
   const resizeTextarea = () => {
@@ -1877,6 +2240,18 @@ function BtwPanel(props) {
   textarea.addEventListener("input", () => {
     setInputValue(textarea.value);
     resizeTextarea();
+  });
+
+  textarea.addEventListener("paste", async (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageFiles = items
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter(Boolean);
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      await attachImageFiles(imageFiles);
+    }
   });
 
   function handleSendOrStop() {
@@ -1891,7 +2266,8 @@ function BtwPanel(props) {
 
     const txt = textarea.value.trim();
     const qList = draftQuotes();
-    if (!txt && qList.length === 0) return;
+    const imgList = draftImages();
+    if (!txt && qList.length === 0 && imgList.length === 0) return;
 
     textarea.value = "";
     setInputValue("");
@@ -1902,6 +2278,7 @@ function BtwPanel(props) {
       threadId: curT.id,
       text: txt,
       quotes: qList,
+      images: imgList,
       legacyChatsAccessor: () => props.btw?.saved?.(s),
     });
   }
@@ -2115,8 +2492,18 @@ function BtwPanel(props) {
     }
   });
 
+  const attachImgBtn = document.createElement("button");
+  attachImgBtn.type = "button";
+  attachImgBtn.className = "oc-btw-attach-btn";
+  attachImgBtn.title = "添加图片 (支持 Ctrl+V 粘贴截图或拖拽图片)";
+  attachImgBtn.setAttribute("aria-label", "添加图片");
+  insert(attachImgBtn, createComponent(Icon, { name: "plus", size: "small" }), null);
+  attachImgBtn.addEventListener("click", () => {
+    hiddenFileInput.click();
+  });
+
   ctxZone.append(ctxBtn, ctxMenu);
-  leftControls.append(modelZone, ctxZone);
+  leftControls.append(attachImgBtn, modelZone, ctxZone);
 
   // Right Submit / Stop Button (Exact native OpenCode IconButton)
   const rightActions = document.createElement("div");
@@ -2129,7 +2516,12 @@ function BtwPanel(props) {
       type: "button",
       size: "large",
       get disabled() {
-        return !isThreadGenerating() && inputValue().trim().length === 0 && draftQuotes().length === 0;
+        return (
+          !isThreadGenerating() &&
+          inputValue().trim().length === 0 &&
+          draftQuotes().length === 0 &&
+          draftImages().length === 0
+        );
       },
       get icon() {
         return createComponent(Icon, {
