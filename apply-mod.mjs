@@ -161,11 +161,11 @@ function isAsarPatched(header, payload) {
     if (!mainFileName) return false;
     const node = assetsMap[mainFileName];
     const offset = Number(node.offset);
-    const mainSrc = payload.subarray(offset, offset + Math.min(node.size, 600000)).toString("utf8");
+    const mainBuf = payload.subarray(offset, offset + node.size);
     return (
-      mainSrc.includes("window.__oc_app_ext") ||
-      mainSrc.includes("window.__oc_btw_slash") ||
-      mainSrc.includes("/btw 随时问答")
+      mainBuf.includes(Buffer.from("window.__oc_app_ext")) ||
+      mainBuf.includes(Buffer.from("window.__oc_btw_slash")) ||
+      mainBuf.includes(Buffer.from("/btw 随时问答"))
     );
   } catch {
     return false;
@@ -424,6 +424,9 @@ function main() {
   }
 
   // Check version and state of current asar
+  if (!fs.existsSync(asarPath) && fs.existsSync(bakPath)) {
+    console.log(`[patch] 检测到目标 app.asar 不存在但官方备份有效，将自动基于备份文件生成 app.asar ...`);
+  }
   const curRawAsar = fs.existsSync(asarPath) ? fs.readFileSync(asarPath) : null;
   let curVersion = "unknown";
   let curIsPatched = false;
@@ -468,6 +471,11 @@ function main() {
   const { header, payload } = parseAsar(rawAsar);
   const targetVersion = getAsarVersion(header, payload);
 
+  if (isAsarPatched(header, payload)) {
+    console.warn(`\n[警告] 检测到备份文件 (${bakPath}) 似乎已包含补丁修改！`);
+    console.warn(`[提示] 若后续注入报错，建议先重新安装一次 OpenCode 官方安装包以获取干净的基准版本。\n`);
+  }
+
   console.log(`[patch] 目标 OpenCode 版本: v${targetVersion}`);
   if (targetVersion !== "2.0.32" && targetVersion !== "unknown") {
     console.log(`[提示] 本补丁在 v2.0.32 下经过完整验证。如果在新版本下遇到匹配错误，可运行 --restore 恢复。`);
@@ -508,7 +516,13 @@ function main() {
   // Dynamically rewrite imports in custom panel to match the user's specific bundle chunk hashes
   customPanelSrc = customPanelSrc.replace(/\.\/main-[A-Za-z0-9_-]+\.js/g, `./${mainFileName}`);
 
-  const markdownFileName = Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k));
+  const markdownFileName = Object.keys(assetsMap).find((k) => {
+    if (!/^markdown-[A-Za-z0-9_-]+\.js$/.test(k)) return false;
+    const node = assetsMap[k];
+    const src = readFileFromAsar(payload, node);
+    // The markdown rendering component exports `t` (e.g. `ki as t` or `as t`)
+    return src.includes("as t") || src.includes(",t}") || src.includes("t as");
+  }) || Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k));
   if (markdownFileName) {
     customPanelSrc = customPanelSrc.replace(/\.\/markdown-[A-Za-z0-9_-]+\.js/g, `./${markdownFileName}`);
   }
