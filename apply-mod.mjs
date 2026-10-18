@@ -137,7 +137,7 @@ function patchSessionRouteBundle(src) {
 
   // 2. Expose timeline controller `p=mv(t)` on `window.__oc_timeline_ctrl` for virtual-scroll navigation
   if (out.includes("p=mv(t),m=Sv(")) {
-    out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_timeline_ctrl=mv(t)),(window.__oc_current_session=t),m=Sv(");
+    out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_current_session=t,window.__oc_timeline_ctrl=mv(t)),m=Sv(");
   } else {
     throw new Error("Could not locate p=mv(t),m=Sv( in route bundle.");
   }
