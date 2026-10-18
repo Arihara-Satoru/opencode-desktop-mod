@@ -1,12 +1,24 @@
 {
   "name": "opencode-desktop-mod",
   "version": "1.0.0",
-  "description": "Minimalist left timeline scrubber, upgraded /btw companion chat and branch-to-new-chat mod for OpenCode Desktop (v2.0.32+)",
+  "description": "Minimalist left timeline scrubber, upgraded /btw companion chat and branch-to-new-chat mod for OpenCode Desktop",
   "type": "module",
+  "main": "apply-mod.mjs",
+  "bin": {
+    "opencode-desktop-mod": "./apply-mod.mjs"
+  },
   "scripts": {
     "apply": "node apply-mod.mjs",
     "restore": "node apply-mod.mjs --restore"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Arihara-Satoru/opencode-desktop-mod.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Arihara-Satoru/opencode-desktop-mod/issues"
+  },
+  "homepage": "https://github.com/Arihara-Satoru/opencode-desktop-mod#readme",
   "keywords": [
     "opencode",
     "opencode-desktop",
@@ -16,6 +28,9 @@
     "fork",
     "electron-mod"
   ],
-  "author": "",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Arihara Satoru",
   "license": "MIT"
 }

@@ -2848,6 +2848,7 @@ const TIMELINE_CACHE_PREFIX = "oc.timeline.v1.";
 const TIMELINE_LRU_KEY = "oc.timeline.v1.lru";
 const memoryTimelineCache = new Map();
 const hydratingSessions = new Map();
+const failedHydrationCooldowns = new Map();
 
 function loadCachedTimelineTurns(sessionID) {
   if (!sessionID) return [];
@@ -2897,9 +2898,15 @@ function ensureFullSessionHistoryLoaded(session, onLoaded) {
   if (!sid || !msgApi?.more || !msgApi?.loadMore) return Promise.resolve(false);
   if (!msgApi.more(sid)) return Promise.resolve(false);
 
+  // Prevent repeated spam if previous attempt failed recently
+  const lastFailed = failedHydrationCooldowns.get(sid) || 0;
+  if (Date.now() - lastFailed < 30000) {
+    return Promise.resolve(false);
+  }
+
   if (hydratingSessions.has(sid)) {
     return hydratingSessions.get(sid).then((res) => {
-      onLoaded?.();
+      if (res && onLoaded) onLoaded();
       return res;
     });
   }
@@ -2909,6 +2916,7 @@ function ensureFullSessionHistoryLoaded(session, onLoaded) {
       await msgApi.loadMore(sid, { all: true });
       return true;
     } catch {
+      failedHydrationCooldowns.set(sid, Date.now());
       return false;
     } finally {
       hydratingSessions.delete(sid);
@@ -2916,7 +2924,9 @@ function ensureFullSessionHistoryLoaded(session, onLoaded) {
   })();
 
   hydratingSessions.set(sid, p);
-  p.then(() => onLoaded?.());
+  p.then((success) => {
+    if (success && onLoaded) onLoaded();
+  });
   return p;
 }
 
@@ -3411,13 +3421,13 @@ function setupGptHoverTimelineRail(ext) {
   };
 
   // Build tick marks from conversation turns
-  const rebuildTicks = () => {
+  const rebuildTicks = (allowHydration = false) => {
     if (!mountedPanel || !trackEl) return;
     const session = ext.sessions.current();
-    if (session?.id && session?.server?.data?.session?.message?.more?.(session.id)) {
+    if (allowHydration && session?.id && session?.server?.data?.session?.message?.more?.(session.id)) {
       ensureFullSessionHistoryLoaded(session, () => {
         lastTurnCount = -1;
-        rebuildTicks();
+        rebuildTicks(false);
       });
     }
     const turns = buildConversationTurns(session, mountedPanel);
@@ -3510,7 +3520,7 @@ function setupGptHoverTimelineRail(ext) {
     // Refresh full turn & heading data lazily when mouse enters the rail
     railEl.addEventListener("mouseenter", () => {
       clearHideTimer();
-      rebuildTicks();
+      rebuildTicks(true);
     });
 
     railEl.addEventListener("mouseleave", () => {

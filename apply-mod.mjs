@@ -1,46 +1,111 @@
 #!/usr/bin/env node
 /**
- * OpenCode Desktop UI Enhancement Patcher (v2.0.32+)
+ * OpenCode Desktop UI Enhancement Patcher
+ * Cross-platform patcher for Windows, macOS, and Linux
  *
  * Features injected:
  * 1. Left Session Timeline Navigation Bar (会话时间轴导航条)
  *    - Displays all user turns (#1, #2, ...) and Assistant Markdown headings (H1~H3)
- *    - Works seamlessly with OpenCode's virtualized timeline scroller
- *    - Supports keyword filtering, heading toggle, collapse to mini-rail, Top/Bottom jump
- * 2. Upgraded /btw Side Q&A Companion Panel (右侧可随时解答疑问的对话框)
- *    - Top-right header toggle button (`/btw`) & `Alt+B` shortcut
- *    - Text selection floating button (`💬 引用到 /btw` / `⚡ 直接解释`, or `Alt+Q`)
- *    - Free model selection (`client.model.list()`) independent of main session
- *    - Context scope control: `⚡ 仅引用/小窗` (default, no main context bloat) / `🔗 最近3轮` / `📚 完整主会话`
- *    - Continuous multi-turn conversation with persistent storage (closing panel never deletes history)
+ *    - Seamlessly integrates with OpenCode virtualized scroller & smooth easing
+ *    - Local index cache + lazy hydration
+ * 2. Upgraded /btw Side Q&A Companion Panel (右侧多轮问答伴侣面板)
+ *    - Top header toggle button & Alt+B shortcut
+ *    - Text selection floating pill ("引用到 /btw" / "⚡ 解释", or Alt+Q)
+ *    - Independent model selector, context modes, persistent tabs
  * 3. Branch to New Chat (分支到新聊天) button
- *    - Placed alongside copy button at assistant turn footer
+ *    - Placed next to copy button at assistant turn footer
  *    - Forks conversation up to current assistant turn into a fresh session
- *    - Auto-numbers branch session titles: `原标题 (分支)`, `原标题 (分支 2)`, `原标题 (分支 3)`
+ *    - Auto-numbers branch session titles: 原标题 (分支), 原标题 (分支 2)...
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
- *   node apply-mod.mjs --restore  # Restore original app.asar from app.asar.bak
+ *   node apply-mod.mjs --restore  # Restore official app.asar from backup
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import crypto from "node:crypto";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const DEFAULT_ASAR_PATH = path.join(
-  process.env.LOCALAPPDATA || "C:/Users/satira/AppData/Local",
-  "Programs",
-  "@opencode-aidesktop",
-  "resources",
-  "app.asar"
-);
-
-const asarPath = process.env.OPENCODE_ASAR_PATH || DEFAULT_ASAR_PATH;
-const bakPath = `${asarPath}.bak`;
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
+
+function getCandidateAsarPaths() {
+  const custom = process.env.OPENCODE_ASAR_PATH;
+  if (custom) return [custom];
+
+  const homedir = os.homedir();
+  const platform = process.platform;
+  const paths = [];
+
+  if (platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || path.join(homedir, "AppData", "Local");
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    paths.push(
+      path.join(localAppData, "Programs", "@opencode-aidesktop", "resources", "app.asar"),
+      path.join(localAppData, "Programs", "opencode-desktop", "resources", "app.asar"),
+      path.join(localAppData, "Programs", "OpenCode", "resources", "app.asar"),
+      path.join(localAppData, "Programs", "@opencode", "desktop", "resources", "app.asar"),
+      path.join(programFiles, "OpenCode", "resources", "app.asar")
+    );
+  } else if (platform === "darwin") {
+    paths.push(
+      "/Applications/OpenCode.app/Contents/Resources/app.asar",
+      path.join(homedir, "Applications", "OpenCode.app", "Contents", "Resources", "app.asar")
+    );
+  } else {
+    // Linux / BSD
+    paths.push(
+      "/usr/lib/opencode/resources/app.asar",
+      "/opt/OpenCode/resources/app.asar",
+      "/opt/opencode/resources/app.asar",
+      path.join(homedir, ".local", "share", "opencode", "resources", "app.asar")
+    );
+  }
+  return paths;
+}
+
+function resolveAsarPath() {
+  const candidates = getCandidateAsarPaths();
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+  return candidates[0];
+}
+
+function isProcessRunning(processName) {
+  try {
+    if (process.platform === "win32") {
+      const output = execSync(`tasklist /FI "IMAGENAME eq ${processName}" /NH`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return output.toLowerCase().includes(processName.toLowerCase());
+    } else {
+      const baseName = processName.replace(/\.exe$/i, "");
+      const output = execSync(`pgrep -i "${baseName}"`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return Boolean(output.trim());
+    }
+  } catch {
+    return false;
+  }
+}
+
+function ensureOpenCodeClosed() {
+  const procName = process.platform === "win32" ? "OpenCode.exe" : "OpenCode";
+  if (isProcessRunning(procName)) {
+    console.error(`\n[错误] 检测到 OpenCode 桌面端正在运行 (${procName})！`);
+    console.error(`[提示] 为避免 app.asar 文件句柄被系统占用锁定 (EBUSY)，请先完全关闭 OpenCode 后再执行此脚本。\n`);
+    process.exit(1);
+  }
+}
 
 function computeIntegrity(buffer) {
   const blockSize = 4 * 1024 * 1024; // 4 MB
@@ -76,30 +141,100 @@ function readFileFromAsar(payload, node) {
   return payload.subarray(offset, offset + node.size);
 }
 
-function patchMainBundle(src) {
+function getAsarVersion(header, payload) {
+  try {
+    const pkgNode = header?.files?.["package.json"];
+    if (pkgNode) {
+      const offset = Number(pkgNode.offset);
+      const pkgBuf = payload.subarray(offset, offset + pkgNode.size);
+      const pkg = JSON.parse(pkgBuf.toString("utf8"));
+      return pkg.version || "unknown";
+    }
+  } catch {}
+  return "unknown";
+}
+
+function isAsarPatched(header, payload) {
+  try {
+    const assetsMap = header?.files?.out?.files?.renderer?.files?.assets?.files || {};
+    const mainFileName = Object.keys(assetsMap).find((k) => /^main-[A-Za-z0-9_-]+\.js$/.test(k));
+    if (!mainFileName) return false;
+    const node = assetsMap[mainFileName];
+    const offset = Number(node.offset);
+    const mainSrc = payload.subarray(offset, offset + Math.min(node.size, 600000)).toString("utf8");
+    return (
+      mainSrc.includes("window.__oc_app_ext") ||
+      mainSrc.includes("window.__oc_btw_slash") ||
+      mainSrc.includes("/btw 随时问答")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function patchMainBundle(src, panelFileName = "panel-c7bWJg2T.js") {
   let out = src;
 
   // 1. Widen default session-chat-panel width when right side panel is opened (600 -> 1080)
   if (out.includes("tR=344,nR=200,rR=600,iR=280")) {
     out = out.replace("tR=344,nR=200,rR=600,iR=280", "tR=344,nR=200,rR=1080,iR=280");
+  } else {
+    out = out.replace(
+      /([a-zA-Z0-9_$]+=344,[a-zA-Z0-9_$]+=200,)([a-zA-Z0-9_$]+=)600(,[a-zA-Z0-9_$]+=280)/,
+      "$1$21080$3"
+    );
   }
 
   // 2. Upgrade Ise (the built-in `btw` extension setup)
-  const iseStartMarker = "Ise=e=>{let t=Re(()=>G(()=>import(`./panel-c7bWJg2T.js`)";
+  const iseStartMarker = `Ise=e=>{let t=Re(()=>G(()=>import(\`./${panelFileName}\`)`;
+  const iseStartRegex = new RegExp(
+    `([a-zA-Z0-9_$]+)=e=>\\{let ([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\\(\\(\\)=>([a-zA-Z0-9_$]+)\\(\\(\\)=>import\\([\\\`'"]\\.\\/${panelFileName.replace(".", "\\.")}[\\\`'"]\\)(?:,[^)]+)?\\)`
+  );
   const iseEndMarker = "close:e=>{i.remove(e.session,e.tab.id),o.get(e.session.key)?.delete(e.tab.id)}})}";
 
-  const iStart = out.indexOf(iseStartMarker);
-  const iEnd = out.indexOf(iseEndMarker, iStart);
-  if (iStart === -1 || iEnd === -1) {
-    throw new Error("Could not locate Ise (btw extension setup) in main bundle.");
+  let iStart = out.indexOf(iseStartMarker);
+  let matchedIseName = "Ise";
+  let matchedRe = "Re";
+  let matchedG = "G";
+
+  if (iStart === -1) {
+    const m = out.match(iseStartRegex);
+    if (m && m.index !== undefined) {
+      iStart = m.index;
+      matchedIseName = m[1];
+      matchedRe = m[3];
+      matchedG = m[4];
+    }
   }
 
+  let iEnd = iStart !== -1 ? out.indexOf(iseEndMarker, iStart) : -1;
+  let endMarkerLen = iseEndMarker.length;
+
+  if (iStart === -1 || iEnd === -1) {
+    // Try generic regex search for Ise function block
+    const fallbackMatch = out.match(
+      /([a-zA-Z0-9_$]+)=e=>\{let t=[a-zA-Z0-9_$]+\(\(\)=>[a-zA-Z0-9_$]+\(\(\)=>import\([`'"]\.\/panel-[^`'"]+[`'"]\)[^}]+close:[a-zA-Z0-9_$]+=>\{[^}]+\}\}\)\}/
+    );
+    if (fallbackMatch && fallbackMatch.index !== undefined) {
+      iStart = fallbackMatch.index;
+      iEnd = iStart + fallbackMatch[0].length;
+      endMarkerLen = 0;
+    } else {
+      throw new Error("Could not locate Ise (btw extension setup) in main bundle.");
+    }
+  }
+
+  // Extract vite dependency mapping array if present in original import
+  const origSnippet = out.slice(iStart, Math.min(out.length, iStart + 250));
+  const mapDepsMatch = origSnippet.match(/__vite__mapDeps\(\[([0-9,\s]+)\]\)/);
+  const mapDepsArg = mapDepsMatch ? `__vite__mapDeps([${mapDepsMatch[1]}]),` : "";
+
   const replacementIse = [
-    "Ise=e=>{",
+    `${matchedIseName}=e=>{`,
     "window.__oc_app_ext=e;",
-    "let t=Re(()=>G(()=>import(`./panel-c7bWJg2T.js`),__vite__mapDeps([28,17,18,29,30]),import.meta.url));",
+    `let t=${matchedRe}(()=>${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url));`,
     "A(NI(()=>void t.preload()));",
-    "G(()=>import(`./panel-c7bWJg2T.js`),__vite__mapDeps([28,17,18,29,30]),import.meta.url).then(m=>m.initCompanion?.(e));",
+    `${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url).then(m=>m.initCompanion?.(e));`,
     "let n=e.layout,r=e.sessions,i=Pse(e),a=E(()=>!!r.current()),",
     "mainTab={id:`main`,get title(){return`/btw`},draggable:!1,closable:`compact`,fallback:!0,label:()=>((()=>{var r=Fse(),a=r.firstChild;return H(r,F(jP,{name:`bubble-5`,size:`small`}),a),H(a,()=>`/btw`),r})())};",
     "e.add(CI,{at:`session.header`,order:15,render:p=>{r7(()=>p.session);return F(R,{get when(){return p.session.id},get children(){return F(hH,{value:`/btw 随时问答 (Alt+B)`,placement:`bottom`,get children(){return F(wH,{type:`button`,variant:`ghost-muted`,class:`group shrink-0`,style:{padding:`0 6px`,color:`var(--v2-text-text-faint)`},onClick:()=>{p.session.id&&n.toggle(`btw:main`,p.session)},get\"aria-expanded\"(){return n.state(`btw:main`,p.session)===`visible`},\"aria-label\":`/btw 随时问答`,get children(){var el=Fse(),sp=el.firstChild;return H(el,F(jP,{name:`bubble-5`,size:`small`}),sp),H(sp,()=>`/btw`),el}})}})}})}});",
@@ -108,7 +243,7 @@ function patchMainBundle(src) {
     "}",
   ].join("");
 
-  out = out.slice(0, iStart) + replacementIse + out.slice(iEnd + iseEndMarker.length);
+  out = out.slice(0, iStart) + replacementIse + out.slice(iEnd + endMarkerLen);
 
   // 3. Isolate ephemeral `ses_btw_*` SSE streaming sessions from main store & notifications
   if (out.includes("function de(e){switch(e.type){")) {
@@ -116,11 +251,22 @@ function patchMainBundle(src) {
       "function de(e){switch(e.type){",
       'function de(e){if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;switch(e.type){'
     );
+  } else {
+    out = out.replace(
+      /function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\)\{switch\(\2\.type\)\{/,
+      'function $1($2){if($2?.data?.sessionID?.startsWith?.("ses_btw_"))return;switch($2.type){'
+    );
   }
+
   if (out.includes("D=e.sdk.event.listen(e=>{")) {
     out = out.replace(
       "D=e.sdk.event.listen(e=>{",
       'D=e.sdk.event.listen(e=>{if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
+    );
+  } else {
+    out = out.replace(
+      /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/,
+      '$1$2.sdk.event.listen($3=>{if($3?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
     );
   }
 
@@ -133,13 +279,26 @@ function patchSessionRouteBundle(src) {
   // 1. Allow right side panel to be resized down to 340px instead of 480px minimum
   if (out.includes("var t_=480,n_=800")) {
     out = out.replace("var t_=480,n_=800", "var t_=340,n_=800");
+  } else {
+    out = out.replace(/var\s+([a-zA-Z0-9_$]+=)480(,[a-zA-Z0-9_$]+=800)/, "var $1340$2");
   }
 
   // 2. Expose timeline controller `p=mv(t)` on `window.__oc_timeline_ctrl` for virtual-scroll navigation
   if (out.includes("p=mv(t),m=Sv(")) {
     out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_current_session=t,window.__oc_timeline_ctrl=mv(t)),m=Sv(");
   } else {
-    throw new Error("Could not locate p=mv(t),m=Sv( in route bundle.");
+    const mvMatch = out.match(/([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\),([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\(\3\)/);
+    if (mvMatch) {
+      const origCtrlVar = mvMatch[1];
+      const fnMv = mvMatch[2];
+      const sessVar = mvMatch[3];
+      out = out.replace(
+        mvMatch[0],
+        `${origCtrlVar}=(window.__oc_current_session=${sessVar},window.__oc_timeline_ctrl=${fnMv}(${sessVar})),${mvMatch[4]}${mvMatch[5]}(${sessVar})`
+      );
+    } else {
+      throw new Error("Could not locate p=mv(t),m=Sv( in route bundle.");
+    }
   }
 
   // 3. Expose virtualizer instance M and scrollAdjustment flusher be() on window.__oc_virtual_scroll
@@ -236,30 +395,84 @@ function patchSessionRouteBundle(src) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (args.includes("--restore")) {
-    if (!fs.existsSync(bakPath)) {
-      console.error(`[restore] Backup not found at ${bakPath}`);
-      process.exit(1);
-    }
-    fs.copyFileSync(bakPath, asarPath);
-    console.log(`[restore] Restored original app.asar from ${bakPath}`);
-    return;
-  }
+  const asarPath = resolveAsarPath();
+  const bakPath = `${asarPath}.bak`;
 
-  if (!fs.existsSync(asarPath)) {
-    console.error(`[patch] app.asar not found at ${asarPath}`);
+  if (!asarPath || (!fs.existsSync(asarPath) && !fs.existsSync(bakPath))) {
+    console.error(`[错误] 未找到 OpenCode 的 app.asar 文件！`);
+    console.error(`尝试检索的路径列表：`);
+    getCandidateAsarPaths().forEach((p) => console.error(`  - ${p}`));
+    console.error(`\n如果你的 OpenCode 安装在自定义目录，可通过环境变量指定：`);
+    console.error(`  Windows (PowerShell): $env:OPENCODE_ASAR_PATH="你的路径\\app.asar"; node apply-mod.mjs`);
+    console.error(`  Windows (CMD):        set OPENCODE_ASAR_PATH=你的路径\\app.asar && node apply-mod.mjs`);
+    console.error(`  macOS / Linux:        OPENCODE_ASAR_PATH="/path/to/app.asar" node apply-mod.mjs\n`);
     process.exit(1);
   }
 
-  if (!fs.existsSync(bakPath)) {
-    console.log(`[patch] Creating backup at ${bakPath} ...`);
-    fs.copyFileSync(asarPath, bakPath);
-  } else {
-    console.log(`[patch] Using clean backup from ${bakPath} as base ...`);
+  // Ensure OpenCode process is closed before modifying files
+  ensureOpenCodeClosed();
+
+  if (args.includes("--restore")) {
+    if (!fs.existsSync(bakPath)) {
+      console.error(`[restore] 未找到备份文件：${bakPath}`);
+      process.exit(1);
+    }
+    fs.copyFileSync(bakPath, asarPath);
+    console.log(`[restore] 成功从官方备份恢复：${bakPath} -> ${asarPath}`);
+    console.log(`[restore] 请启动 OpenCode 桌面端。`);
+    return;
   }
 
+  // Check version and state of current asar
+  const curRawAsar = fs.existsSync(asarPath) ? fs.readFileSync(asarPath) : null;
+  let curVersion = "unknown";
+  let curIsPatched = false;
+
+  if (curRawAsar) {
+    try {
+      const parsed = parseAsar(curRawAsar);
+      curVersion = getAsarVersion(parsed.header, parsed.payload);
+      curIsPatched = isAsarPatched(parsed.header, parsed.payload);
+    } catch {}
+  }
+
+  // Handle backup file logic safely
+  if (!fs.existsSync(bakPath)) {
+    if (curIsPatched) {
+      console.log(`[patch] 警告：当前 app.asar 已包含补丁且无官方备份，将基于当前文件生成备份。`);
+    } else {
+      console.log(`[patch] 正在创建官方原始文件备份至 ${bakPath} ...`);
+    }
+    fs.copyFileSync(asarPath, bakPath);
+  } else {
+    // If bak exists, check if OpenCode was updated to a newer official version
+    try {
+      const bakRaw = fs.readFileSync(bakPath);
+      const bakParsed = parseAsar(bakRaw);
+      const bakVersion = getAsarVersion(bakParsed.header, bakParsed.payload);
+
+      if (!curIsPatched && curVersion !== "unknown" && curVersion !== bakVersion) {
+        console.log(`[patch] 检测到官方客户端已更新 (v${bakVersion} -> v${curVersion})！`);
+        console.log(`[patch] 正在刷新官方基准备份 app.asar.bak 为 v${curVersion} ...`);
+        fs.copyFileSync(asarPath, bakPath);
+      } else {
+        console.log(`[patch] 使用干净的官方备份 (${bakPath}, v${bakVersion}) 作为补丁基准 ...`);
+      }
+    } catch {
+      console.log(`[patch] 使用已有的官方备份 (${bakPath}) 作为补丁基准 ...`);
+    }
+  }
+
+  // Always read from the clean backup as base to ensure pristine idempotent patching
   const rawAsar = fs.readFileSync(bakPath);
   const { header, payload } = parseAsar(rawAsar);
+  const targetVersion = getAsarVersion(header, payload);
+
+  console.log(`[patch] 目标 OpenCode 版本: v${targetVersion}`);
+  if (targetVersion !== "2.0.32" && targetVersion !== "unknown") {
+    console.log(`[提示] 本补丁在 v2.0.32 下经过完整验证。如果在新版本下遇到匹配错误，可运行 --restore 恢复。`);
+  }
+
   const assetsMap = header?.files?.out?.files?.renderer?.files?.assets?.files;
   if (!assetsMap) {
     throw new Error("Could not find out/renderer/assets in app.asar header.");
@@ -269,27 +482,43 @@ function main() {
   const routeFileName = Object.keys(assetsMap).find(
     (k) => /^route-[A-Za-z0-9_-]+\.js$/.test(k) && assetsMap[k].size > 200000
   );
-  const panelFileName = "panel-c7bWJg2T.js";
 
-  if (!mainFileName || !routeFileName || !assetsMap[panelFileName]) {
-    throw new Error(
-      `Missing expected asset files: main=${mainFileName}, route=${routeFileName}, panel=${panelFileName}`
-    );
+  if (!mainFileName || !routeFileName) {
+    throw new Error(`Missing expected asset files: main=${mainFileName}, route=${routeFileName}`);
   }
-
-  console.log(`[patch] Target assets:`);
-  console.log(`  - Main bundle:  ${mainFileName}`);
-  console.log(`  - Route bundle: ${routeFileName}`);
-  console.log(`  - BTW panel:    ${panelFileName}`);
 
   const origMainSrc = readFileFromAsar(payload, assetsMap[mainFileName]).toString("utf8");
   const origRouteSrc = readFileFromAsar(payload, assetsMap[routeFileName]).toString("utf8");
+
+  // Dynamically detect the btw panel chunk name referenced by main bundle
+  const panelRefMatch = origMainSrc.match(/import\([`'"]\.\/(panel-[A-Za-z0-9_-]+\.js)[`'"]\)/);
+  const targetPanelFileName = panelRefMatch ? panelRefMatch[1] : "panel-c7bWJg2T.js";
+
+  if (!assetsMap[targetPanelFileName]) {
+    throw new Error(`Missing expected btw panel asset: ${targetPanelFileName}`);
+  }
+
+  console.log(`[patch] 定位关键模块文件:`);
+  console.log(`  - 主包入口 (Main):   ${mainFileName}`);
+  console.log(`  - 会话路由 (Route):  ${routeFileName}`);
+  console.log(`  - 问答面板 (Panel):  ${targetPanelFileName}`);
+
   let customPanelSrc = fs.readFileSync(customPanelPath, "utf8");
 
-  // Ensure import filename in panel-c7bWJg2T.js matches mainFileName
+  // Dynamically rewrite imports in custom panel to match the user's specific bundle chunk hashes
   customPanelSrc = customPanelSrc.replace(/\.\/main-[A-Za-z0-9_-]+\.js/g, `./${mainFileName}`);
 
-  const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc), "utf8");
+  const markdownFileName = Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k));
+  if (markdownFileName) {
+    customPanelSrc = customPanelSrc.replace(/\.\/markdown-[A-Za-z0-9_-]+\.js/g, `./${markdownFileName}`);
+  }
+
+  const shimmerFileName = Object.keys(assetsMap).find((k) => /^text-shimmer-[A-Za-z0-9_-]+\.js$/.test(k));
+  if (shimmerFileName) {
+    customPanelSrc = customPanelSrc.replace(/\.\/text-shimmer-[A-Za-z0-9_-]+\.js/g, `./${shimmerFileName}`);
+  }
+
+  const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc, targetPanelFileName), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
@@ -310,7 +539,7 @@ function main() {
   };
   currentOffset += patchedRouteBuf.length;
 
-  assetsMap[panelFileName] = {
+  assetsMap[targetPanelFileName] = {
     size: patchedPanelBuf.length,
     offset: String(currentOffset),
     integrity: computeIntegrity(patchedPanelBuf),
@@ -340,7 +569,10 @@ function main() {
   ]);
 
   fs.writeFileSync(asarPath, finalAsarBuf);
-  console.log(`[patch] Successfully wrote patched app.asar (${finalAsarBuf.length} bytes).`);
+  console.log(`\n[patch] 成功完成补丁写入！`);
+  console.log(`[patch] 目标文件：${asarPath} (${finalAsarBuf.length} 字节)`);
+  console.log(`[patch] 官方原版备份保留在：${bakPath}`);
+  console.log(`[patch] 现在可启动 OpenCode 桌面端尽情体验增强功能。\n`);
 }
 
 main();
