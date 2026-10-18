@@ -46,7 +46,7 @@
 ### 一键应用
 1. 克隆或下载本仓库到本地任意目录：
    ```bash
-   git clone https://github.com/your-username/opencode-desktop-mod.git
+   git clone https://github.com/Arihara-Satoru/opencode-desktop-mod.git
    cd opencode-desktop-mod
    ```
 2. 双击运行 **`应用桌面端补丁.cmd`**（或在终端执行 `node apply-mod.mjs`）。
