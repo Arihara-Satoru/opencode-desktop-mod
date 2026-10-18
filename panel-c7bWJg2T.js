@@ -280,17 +280,308 @@ const COMPANION_CSS = `
 }
 
 /* --- Native-Styled /btw Side Panel --- */
-.oc-btw-popover-menu {
-  position: absolute;
-  z-index: 100;
+.oc-btw-tabs-bar {
+  display: flex;
+  align-items: center;
+  height: 42px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-weaker-base, var(--v2-border-border-weak, rgba(0, 0, 0, 0.07)));
+  background: var(--v2-background-bg-base, #ffffff);
+  flex-shrink: 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.oc-btw-tabs-scroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 0;
+}
+
+.oc-btw-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.oc-btw-tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: 200px;
+  padding: 0 6px 0 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--v2-text-text-muted, #71717a);
+  font-family: var(--v2-font-family-sans, Inter, sans-serif);
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 16px;
+  letter-spacing: -0.04px;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  box-sizing: border-box;
+}
+
+.oc-btw-tab-item:hover:not(.is-active) {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.08));
+  color: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-tab-item.is-active {
+  background: var(--v2-background-bg-layer-02, rgba(0, 0, 0, 0.06));
+  color: var(--v2-text-text-base, #18181b);
+  font-weight: 500;
+}
+
+.oc-btw-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: currentColor;
+  opacity: 0.75;
+}
+
+.oc-btw-tab-item.is-active .oc-btw-tab-icon {
+  opacity: 1;
+}
+
+.oc-btw-tab-title {
+  min-width: 0;
+  max-width: 136px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-btw-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--v2-text-text-faint, #a1a1aa);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  margin-left: 1px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.oc-btw-tab-close:hover {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.14));
+  color: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--v2-icon-icon-muted, #71717a);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  margin-left: 2px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.oc-btw-tab-add:hover {
+  background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.1));
+  color: var(--v2-text-text-base, #18181b);
+}
+
+/* --- Composer Dock & Input Box --- */
+.oc-btw-composer-dock {
+  width: 100%;
+  flex-shrink: 0;
+  background: var(--v2-background-bg-base, #ffffff);
+  padding: 4px 12px 12px 12px;
+  box-sizing: border-box;
+}
+
+.oc-btw-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   border-radius: 12px;
   background: var(--v2-background-bg-base, #ffffff);
+  box-shadow: var(--v2-elevation-raised, 0 2px 4px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.12));
+  border: none;
+  box-sizing: border-box;
+}
+
+[data-color-scheme="dark"] .oc-btw-composer {
+  background: var(--v2-background-bg-layer-01, #1f1f23);
+}
+
+.oc-btw-quotes-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 2px 12px;
+  box-sizing: border-box;
+}
+
+.oc-btw-draft-quote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border-radius: 6px;
+  background: var(--v2-background-bg-layer-02, rgba(128, 128, 128, 0.08));
+  border: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.14));
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--v2-text-text-muted, #71717a);
+  box-sizing: border-box;
+}
+
+.oc-btw-draft-quote-text {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-btw-draft-quote-rm {
+  border: none;
+  background: transparent;
+  color: var(--v2-text-text-faint, #a1a1aa);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.oc-btw-draft-quote-rm:hover {
+  color: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-textarea {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  max-height: 144px;
+  resize: none !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 12px 14px 6px 14px;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+  color: var(--v2-text-text-base, #18181b);
+  font-family: var(--v2-font-family-sans, var(--font-family-sans, inherit));
+  box-sizing: border-box;
+  user-select: text;
+}
+
+.oc-btw-textarea::placeholder {
+  color: var(--v2-text-text-faint, #a1a1aa);
+}
+
+.oc-btw-controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px 6px 8px;
+  box-sizing: border-box;
+}
+
+.oc-btw-controls-left {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.oc-btw-controls-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* --- Upward Popover Menus (Never clip at screen bottom) --- */
+.oc-btw-popover-up {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 300;
+  border-radius: 10px;
+  background: var(--v2-background-bg-base, #ffffff);
   border: 1px solid var(--v2-border-border-base, rgba(0, 0, 0, 0.08));
-  box-shadow: var(--v2-elevation-raised, 0 10px 28px -4px rgba(0, 0, 0, 0.14));
+  box-shadow: var(--v2-elevation-floating, 0 10px 28px -4px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.08));
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  box-sizing: border-box;
+}
+
+.oc-btw-popover-model {
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  max-height: min(300px, 52vh);
+  overflow: hidden;
+}
+
+.oc-btw-popover-ctx {
+  width: 236px;
+  max-width: calc(100vw - 32px);
+}
+
+.oc-btw-model-search {
+  padding: 4px 6px 6px 6px;
+  border-bottom: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.14));
+  flex-shrink: 0;
+}
+
+.oc-btw-model-search-input {
+  width: 100%;
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--v2-text-text-base, #18181b);
+  padding: 0;
+}
+
+.oc-btw-model-search-input::placeholder {
+  color: var(--v2-text-text-faint, #a1a1aa);
+}
+
+.oc-btw-model-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  scrollbar-width: thin;
 }
 
 .oc-btw-menu-item {
@@ -309,6 +600,8 @@ const COMPANION_CSS = `
   font-weight: 440;
   text-align: left;
   cursor: pointer;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .oc-btw-menu-item:hover,
@@ -321,12 +614,13 @@ const COMPANION_CSS = `
   font-weight: 500;
   color: var(--v2-text-text-faint, #a1a1aa);
   padding: 6px 8px 2px;
+  flex-shrink: 0;
 }
 
 .oc-btw-pill-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   height: 26px;
   padding: 0 7px;
   border-radius: 6px;
@@ -336,13 +630,59 @@ const COMPANION_CSS = `
   font-size: 12.5px;
   font-weight: 440;
   cursor: pointer;
-  max-width: 190px;
+  max-width: 185px;
   transition: background 0.12s, color 0.12s;
+  box-sizing: border-box;
 }
 
 .oc-btw-pill-btn:hover {
   background: var(--v2-overlay-simple-overlay-hover, rgba(128, 128, 128, 0.1));
   color: var(--v2-text-text-base, #18181b);
+}
+
+.oc-btw-pill-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-btw-msg-quote {
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-02, rgba(128, 128, 128, 0.06));
+  border: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.14));
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--v2-text-text-muted, #71717a);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  max-width: 90%;
+}
+
+.oc-btw-asst {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.oc-btw-asst-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.oc-btw-asst:hover .oc-btw-asst-footer {
+  opacity: 1;
 }
 `;
 
@@ -874,135 +1214,128 @@ function BtwPanel(props) {
   document.addEventListener("mousedown", onDocMouseDown);
   onCleanup(() => document.removeEventListener("mousedown", onDocMouseDown));
 
-  // --- 1. Minimalist Native Header Bar ---
+  // --- 1. Native Tab-Strip Header Bar (Matches Image 2: [💬 Title ×] [💬 Title ×] +) ---
   const headerBar = document.createElement("div");
-  headerBar.className =
-    "relative flex h-10 shrink-0 items-center justify-between gap-2 border-b border-v2-border-border-base px-3";
+  headerBar.className = "oc-btw-tabs-bar";
 
-  const threadZone = document.createElement("div");
-  threadZone.className = "relative min-w-0 flex-1";
-  threadZone.setAttribute("data-btw-menu-zone", "thread");
-
-  const threadTrigger = document.createElement("button");
-  threadTrigger.type = "button";
-  threadTrigger.className = "oc-btw-pill-btn max-w-full";
-  const threadTitleSpan = document.createElement("span");
-  threadTitleSpan.className = "truncate";
-  insert(
-    threadTrigger,
-    () => {
-      const cur = activeThread();
-      const count = threads().length;
-      return count > 1 ? `${cur.title || "新对话"} (${ threads().indexOf(cur) + 1 }/${count})` : cur.title || "新对话";
+  const tabsScroll = document.createElement("div");
+  tabsScroll.className = "oc-btw-tabs-scroll";
+  tabsScroll.addEventListener(
+    "wheel",
+    (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        tabsScroll.scrollLeft += e.deltaY > 0 ? 48 : -48;
+        e.preventDefault();
+      }
     },
-    null
+    { passive: false }
   );
-  insert(
-    threadTrigger,
-    createComponent(Icon, { name: "chevron-down", size: "small", class: "shrink-0 opacity-60" }),
-    null
-  );
-  threadTrigger.addEventListener("click", () => {
-    setOpenMenu(openMenu() === "thread" ? "" : "thread");
-  });
 
-  const threadMenu = document.createElement("div");
-  threadMenu.className = "oc-btw-popover-menu left-0 top-9 w-64 max-h-64 overflow-y-auto";
-  createEffect(() => {
-    threadMenu.style.display = openMenu() === "thread" ? "flex" : "none";
-    if (openMenu() !== "thread") return;
-    threadMenu.innerHTML = "";
-    const list = threads();
-    const curId = activeThread().id;
-    list.forEach((t, idx) => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = `oc-btw-menu-item ${t.id === curId ? "is-selected" : ""}`;
-      const label = document.createElement("span");
-      label.className = "truncate";
-      label.textContent = `${idx + 1}. ${t.title || "新对话"}`;
-      const meta = document.createElement("span");
-      meta.className = "shrink-0 text-[11px] text-v2-text-text-faint";
-      meta.textContent = `${t.messages?.filter((m) => m.role === "user").length || 0} 轮`;
-      item.append(label, meta);
-      item.addEventListener("click", () => {
-        storeMemo().setState((prev) => ({ ...prev, activeThreadId: t.id }));
-        setOpenMenu("");
-      });
-      threadMenu.appendChild(item);
+  const closeThreadById = (targetId) => {
+    const s = sessionMemo();
+    if (s?.id && targetId) {
+      activeAbortControllers.get(`${s.id}:${targetId}`)?.abort();
+    }
+    storeMemo().setState((prev) => {
+      const idx = prev.threads.findIndex((t) => t.id === targetId);
+      const remaining = prev.threads.filter((t) => t.id !== targetId);
+      const nextThreads = remaining.length > 0 ? remaining : [createDefaultThread()];
+      let nextActiveId = prev.activeThreadId;
+      if (prev.activeThreadId === targetId || !nextThreads.some((t) => t.id === nextActiveId)) {
+        const pickIdx = Math.min(Math.max(0, idx), nextThreads.length - 1);
+        nextActiveId = nextThreads[pickIdx].id;
+      }
+      return {
+        ...prev,
+        activeThreadId: nextActiveId,
+        threads: nextThreads,
+      };
+    });
+  };
+
+  insert(
+    tabsScroll,
+    createComponent(For, {
+      get each() {
+        return threads();
+      },
+      children: (t) => {
+        const tabEl = document.createElement("div");
+        tabEl.setAttribute("role", "tab");
+        createEffect(() => {
+          const isActive = activeThread()?.id === t.id;
+          tabEl.className = `oc-btw-tab-item ${isActive ? "is-active" : ""}`;
+          tabEl.setAttribute("aria-selected", isActive ? "true" : "false");
+        });
+
+        const iconWrap = document.createElement("span");
+        iconWrap.className = "oc-btw-tab-icon";
+        insert(iconWrap, createComponent(Icon, { name: "bubble-5", size: "small" }), null);
+
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "oc-btw-tab-title";
+        insert(
+          titleSpan,
+          () => {
+            const latest = threads().find((item) => item.id === t.id);
+            return latest?.title || t.title || "新对话";
+          },
+          null
+        );
+
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "oc-btw-tab-close";
+        closeBtn.title = "关闭此对话";
+        closeBtn.setAttribute("aria-label", "关闭此对话");
+        insert(closeBtn, createComponent(Icon, { name: "outline-xmark", size: "small" }), null);
+        closeBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          closeThreadById(t.id);
+        });
+
+        tabEl.addEventListener("click", () => {
+          storeMemo().setState((prev) => ({ ...prev, activeThreadId: t.id }));
+        });
+        tabEl.addEventListener("auxclick", (e) => {
+          if (e.button === 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeThreadById(t.id);
+          }
+        });
+
+        tabEl.append(iconWrap, titleSpan, closeBtn);
+        return tabEl;
+      },
+    }),
+    null
+  );
+
+  // "+" button immediately next to the last tab (matches Image 2)
+  const addTabBtn = document.createElement("button");
+  addTabBtn.type = "button";
+  addTabBtn.className = "oc-btw-tab-add";
+  addTabBtn.title = "新建对话";
+  addTabBtn.setAttribute("aria-label", "新建对话");
+  insert(addTabBtn, createComponent(Icon, { name: "plus", size: "small" }), null);
+  addTabBtn.addEventListener("click", () => {
+    const nt = createDefaultThread();
+    storeMemo().setState((prev) => ({
+      ...prev,
+      activeThreadId: nt.id,
+      threads: [...prev.threads, nt],
+    }));
+    setOpenMenu("");
+    requestAnimationFrame(() => {
+      tabsScroll.scrollTo({ left: tabsScroll.scrollWidth, behavior: "smooth" });
+      textarea.focus();
     });
   });
 
-  threadZone.append(threadTrigger, threadMenu);
-
-  const headerActions = document.createElement("div");
-  headerActions.className = "flex shrink-0 items-center gap-0.5";
-
-  insert(
-    headerActions,
-    createComponent(Tooltip, {
-      value: "新建问答话题",
-      placement: "bottom",
-      get children() {
-        return createComponent(IconButton, {
-          size: "small",
-          variant: "ghost-muted",
-          get icon() {
-            return createComponent(Icon, { name: "plus" });
-          },
-          "aria-label": "新建问答话题",
-          onClick: () => {
-            const nt = createDefaultThread();
-            storeMemo().setState((prev) => ({
-              ...prev,
-              activeThreadId: nt.id,
-              threads: [...prev.threads, nt],
-            }));
-            setOpenMenu("");
-            requestAnimationFrame(() => textarea.focus());
-          },
-        });
-      },
-    }),
-    null
-  );
-
-  insert(
-    headerActions,
-    createComponent(Tooltip, {
-      value: "删除当前话题",
-      placement: "bottom",
-      get children() {
-        return createComponent(IconButton, {
-          size: "small",
-          variant: "ghost-muted",
-          get icon() {
-            return createComponent(Icon, { name: "outline-xmark" });
-          },
-          "aria-label": "删除当前话题",
-          onClick: () => {
-            const curThread = activeThread();
-            const s = sessionMemo();
-            if (s?.id && curThread?.id) {
-              activeAbortControllers.get(`${s.id}:${curThread.id}`)?.abort();
-            }
-            storeMemo().setState((prev) => {
-              const remaining = prev.threads.filter((t) => t.id !== curThread.id);
-              const nextThreads = remaining.length > 0 ? remaining : [createDefaultThread()];
-              return {
-                ...prev,
-                activeThreadId: nextThreads[nextThreads.length - 1].id,
-                threads: nextThreads,
-              };
-            });
-          },
-        });
-      },
-    }),
-    null
-  );
-
-  headerBar.append(threadZone, headerActions);
+  tabsScroll.appendChild(addTabBtn);
+  headerBar.appendChild(tabsScroll);
 
   // --- 2. Messages Area (Native OpenCode Message Layout) ---
   const messagesScroll = document.createElement("div");
@@ -1057,11 +1390,10 @@ function BtwPanel(props) {
 
           if (Array.isArray(msg.quotes) && msg.quotes.length > 0) {
             const qContainer = document.createElement("div");
-            qContainer.className = "flex flex-col items-end gap-1 max-w-[88%]";
+            qContainer.className = "flex flex-col items-end gap-1 w-full";
             for (const q of msg.quotes) {
               const qBox = document.createElement("div");
-              qBox.className =
-                "rounded-[8px] bg-v2-background-bg-layer-02/70 border border-v2-border-border-base px-2.5 py-1.5 text-[11.5px] leading-relaxed text-v2-text-text-muted line-clamp-3 break-words";
+              qBox.className = "oc-btw-msg-quote";
               qBox.textContent = q.text;
               qBox.title = q.text;
               qContainer.appendChild(qBox);
@@ -1082,7 +1414,7 @@ function BtwPanel(props) {
 
         // Assistant response (clean borderless Markdown like main chat)
         const asstWrap = document.createElement("div");
-        asstWrap.className = "group/asst flex flex-col gap-1 w-full min-w-0";
+        asstWrap.className = "oc-btw-asst";
 
         if (msg.pending) {
           const working = document.createElement("div");
@@ -1103,7 +1435,7 @@ function BtwPanel(props) {
 
         if (msg.error) {
           const errRow = document.createElement("div");
-          errRow.className = "flex items-center justify-between gap-2 rounded-lg bg-v2-background-bg-layer-02 px-3 py-2 text-13-regular text-v2-text-text-muted";
+          errRow.className = "flex items-center justify-between gap-2 rounded-lg bg-v2-background-bg-layer-02 px-3 py-2 text-[13px] text-v2-text-text-muted";
           const errText = document.createElement("span");
           errText.className = "truncate";
           errText.textContent = msg.error;
@@ -1138,15 +1470,14 @@ function BtwPanel(props) {
         );
 
         const footerBar = document.createElement("div");
-        footerBar.className =
-          "flex items-center justify-between gap-2 pt-0.5 opacity-0 group-hover/asst:opacity-100 transition-opacity";
+        footerBar.className = "oc-btw-asst-footer";
 
         const metaSpan = document.createElement("span");
         metaSpan.className = "text-[11px] text-v2-text-text-faint truncate select-none";
         metaSpan.textContent = msg.modelLabel || "";
 
         const btnGroup = document.createElement("div");
-        btnGroup.className = "flex items-center gap-0.5";
+        btnGroup.className = "flex items-center gap-1";
 
         insert(
           btnGroup,
@@ -1215,12 +1546,11 @@ function BtwPanel(props) {
 
   // --- 3. Bottom Composer Dock (Identical to OpenCode Native Composer Dock) ---
   const composerDock = document.createElement("div");
-  composerDock.className = "w-full shrink-0 bg-v2-background-bg-base px-3 pb-3 pt-1";
+  composerDock.className = "oc-btw-composer-dock";
 
   const composerForm = document.createElement("form");
   composerForm.setAttribute("data-component", "composer");
-  composerForm.className =
-    "group/composer relative flex flex-col w-full rounded-xl bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)] border border-v2-border-border-base/60";
+  composerForm.className = "group/composer oc-btw-composer";
   composerForm.addEventListener("submit", (e) => {
     e.preventDefault();
     handleSendOrStop();
@@ -1228,23 +1558,22 @@ function BtwPanel(props) {
 
   // 3a. Attached Quotes inside top of Composer Card
   const quotesRow = document.createElement("div");
-  quotesRow.className = "flex flex-wrap gap-1.5 px-3 pt-2.5 pb-0.5";
+  quotesRow.className = "oc-btw-quotes-row";
   createEffect(() => {
     const quotes = draftQuotes();
     quotesRow.style.display = quotes.length > 0 ? "flex" : "none";
     quotesRow.innerHTML = "";
     for (const q of quotes) {
       const pill = document.createElement("div");
-      pill.className =
-        "group flex items-center gap-1.5 max-w-full rounded-[6px] bg-v2-background-bg-layer-02 border border-v2-border-border-base px-2 py-1 text-[11.5px] text-v2-text-text-muted";
+      pill.className = "oc-btw-draft-quote";
       const textSpan = document.createElement("span");
-      textSpan.className = "truncate max-w-[240px]";
+      textSpan.className = "oc-btw-draft-quote-text";
       textSpan.textContent = q.text.replace(/\s+/g, " ");
       textSpan.title = q.text;
 
       const rmBtn = document.createElement("button");
       rmBtn.type = "button";
-      rmBtn.className = "shrink-0 text-v2-text-text-faint hover:text-v2-text-text-base px-0.5";
+      rmBtn.className = "oc-btw-draft-quote-rm";
       rmBtn.textContent = "×";
       rmBtn.addEventListener("click", () => {
         const curT = activeThread();
@@ -1261,16 +1590,15 @@ function BtwPanel(props) {
     }
   });
 
-  // 3b. Textarea Editor
+  // 3b. Textarea Editor (No browser border, no resize grip)
   const textarea = document.createElement("textarea");
   textarea.rows = 2;
   textarea.placeholder = "随便问点什么，选中左侧文字可引用…";
-  textarea.className =
-    "block w-full min-h-[52px] max-h-[140px] resize-none bg-transparent px-3.5 pt-3 pb-1.5 text-[13px] font-[440] leading-5 text-v2-text-text-base placeholder:text-v2-text-text-faint focus:outline-none select-text";
+  textarea.className = "oc-btw-textarea";
 
   const resizeTextarea = () => {
     textarea.style.height = "auto";
-    textarea.style.height = Math.min(140, Math.max(52, textarea.scrollHeight)) + "px";
+    textarea.style.height = Math.min(144, Math.max(54, textarea.scrollHeight)) + "px";
   };
 
   textarea.addEventListener("input", () => {
@@ -1312,12 +1640,29 @@ function BtwPanel(props) {
     }
   });
 
+  // Helper to clamp upward popovers horizontally within the side panel / viewport
+  const clampUpwardMenuHorizontal = (menuEl) => {
+    menuEl.style.left = "0px";
+    requestAnimationFrame(() => {
+      if (!menuEl.isConnected) return;
+      const menuRect = menuEl.getBoundingClientRect();
+      const panelRect = root.getBoundingClientRect();
+      const rightBound = Math.min(window.innerWidth - 8, panelRect.right - 8);
+      if (menuRect.right > rightBound) {
+        const shift = Math.min(menuRect.left - Math.max(8, panelRect.left + 8), menuRect.right - rightBound);
+        if (shift > 0) {
+          menuEl.style.left = `${-Math.round(shift)}px`;
+        }
+      }
+    });
+  };
+
   // 3c. Bottom Controls Bar inside Composer Card (Model Pill + Context Pill + Submit Button)
   const controlsBar = document.createElement("div");
-  controlsBar.className = "flex h-10 items-center justify-between px-2";
+  controlsBar.className = "oc-btw-controls-bar";
 
   const leftControls = document.createElement("div");
-  leftControls.className = "flex items-center gap-0.5 min-w-0";
+  leftControls.className = "oc-btw-controls-left";
 
   // Model Selector Pill + Upward Popover
   const modelZone = document.createElement("div");
@@ -1327,8 +1672,10 @@ function BtwPanel(props) {
   const modelBtn = document.createElement("button");
   modelBtn.type = "button";
   modelBtn.className = "oc-btw-pill-btn";
+  const modelBtnLabel = document.createElement("span");
+  modelBtnLabel.className = "oc-btw-pill-text";
   insert(
-    modelBtn,
+    modelBtnLabel,
     () => {
       const key = globalPrefs().modelKey;
       if (!key) {
@@ -1340,6 +1687,7 @@ function BtwPanel(props) {
     },
     null
   );
+  modelBtn.appendChild(modelBtnLabel);
   insert(
     modelBtn,
     createComponent(Icon, { name: "chevron-down", size: "small", class: "shrink-0 opacity-60" }),
@@ -1347,26 +1695,29 @@ function BtwPanel(props) {
   );
   modelBtn.addEventListener("click", () => {
     setModelFilter("");
-    setOpenMenu(openMenu() === "model" ? "" : "model");
+    modelSearchInput.value = "";
+    const next = openMenu() === "model" ? "" : "model";
+    setOpenMenu(next);
+    if (next === "model") {
+      clampUpwardMenuHorizontal(modelMenu);
+      requestAnimationFrame(() => modelSearchInput.focus());
+    }
   });
 
   const modelMenu = document.createElement("div");
-  modelMenu.className = "oc-btw-popover-menu bottom-9 left-0 w-68 max-h-72 overflow-hidden";
+  modelMenu.className = "oc-btw-popover-up oc-btw-popover-model";
 
   const modelSearchWrap = document.createElement("div");
-  modelSearchWrap.className = "px-1.5 py-1 border-b border-v2-border-border-base/60 shrink-0";
+  modelSearchWrap.className = "oc-btw-model-search";
   const modelSearchInput = document.createElement("input");
   modelSearchInput.type = "text";
   modelSearchInput.placeholder = "搜索模型…";
-  modelSearchInput.className =
-    "w-full bg-transparent text-[12px] leading-5 text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint";
+  modelSearchInput.className = "oc-btw-model-search-input";
   modelSearchInput.addEventListener("input", () => setModelFilter(modelSearchInput.value));
   modelSearchWrap.appendChild(modelSearchInput);
 
   const modelListScroll = document.createElement("div");
-  modelListScroll.className = "flex-1 min-h-0 overflow-y-auto pt-1 flex flex-col gap-0.5";
-  modelListScroll.style.maxHeight = "230px";
-  modelListScroll.style.scrollbarWidth = "thin";
+  modelListScroll.className = "oc-btw-model-list";
 
   modelMenu.append(modelSearchWrap, modelListScroll);
 
@@ -1446,25 +1797,32 @@ function BtwPanel(props) {
   const ctxBtn = document.createElement("button");
   ctxBtn.type = "button";
   ctxBtn.className = "oc-btw-pill-btn";
+  const ctxBtnLabel = document.createElement("span");
+  ctxBtnLabel.className = "oc-btw-pill-text";
   insert(
-    ctxBtn,
+    ctxBtnLabel,
     () => {
       const mode = globalPrefs().contextMode || "none";
       return ctxModes.find((m) => m.id === mode)?.short || "仅当前";
     },
     null
   );
+  ctxBtn.appendChild(ctxBtnLabel);
   insert(
     ctxBtn,
     createComponent(Icon, { name: "chevron-down", size: "small", class: "shrink-0 opacity-60" }),
     null
   );
   ctxBtn.addEventListener("click", () => {
-    setOpenMenu(openMenu() === "context" ? "" : "context");
+    const next = openMenu() === "context" ? "" : "context";
+    setOpenMenu(next);
+    if (next === "context") {
+      clampUpwardMenuHorizontal(ctxMenu);
+    }
   });
 
   const ctxMenu = document.createElement("div");
-  ctxMenu.className = "oc-btw-popover-menu bottom-9 left-0 w-56";
+  ctxMenu.className = "oc-btw-popover-up oc-btw-popover-ctx";
   createEffect(() => {
     const isOpen = openMenu() === "context";
     ctxMenu.style.display = isOpen ? "flex" : "none";
@@ -1489,13 +1847,14 @@ function BtwPanel(props) {
 
   // Right Submit / Stop Button (Exact native OpenCode IconButton)
   const rightActions = document.createElement("div");
-  rightActions.className = "flex shrink-0 items-center";
+  rightActions.className = "oc-btw-controls-right";
 
   insert(
     rightActions,
     createComponent(IconButton, {
       "data-action": "composer-submit",
       type: "button",
+      size: "large",
       get disabled() {
         return !isThreadGenerating() && inputValue().trim().length === 0 && draftQuotes().length === 0;
       },
@@ -1507,7 +1866,6 @@ function BtwPanel(props) {
         });
       },
       variant: "submit",
-      class: "size-7 rounded-md p-[6px]",
       "aria-label": "发送",
       onClick: (e) => {
         e.preventDefault();
