@@ -13,6 +13,10 @@
  *    - Free model selection (`client.model.list()`) independent of main session
  *    - Context scope control: `⚡ 仅引用/小窗` (default, no main context bloat) / `🔗 最近3轮` / `📚 完整主会话`
  *    - Continuous multi-turn conversation with persistent storage (closing panel never deletes history)
+ * 3. Branch to New Chat (分支到新聊天) button
+ *    - Placed alongside copy button at assistant turn footer
+ *    - Forks conversation up to current assistant turn into a fresh session
+ *    - Auto-numbers branch session titles: `原标题 (分支)`, `原标题 (分支 2)`, `原标题 (分支 3)`
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
@@ -146,6 +150,66 @@ function patchSessionRouteBundle(src) {
     );
   } else {
     throw new Error("Could not locate e.setRevealMessage in route bundle.");
+  }
+
+  // 4. Inject "Branch to new chat" (分支到新聊天) button next to copy button in assistant response footer
+  const declTarget = "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))};";
+  const declInject = [
+    "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))},",
+    "[__oc_fk_l,__oc_set_fk_l]=en(!1),",
+    "__oc_fork=async()=>{",
+    "if(__oc_fk_l())return;",
+    "let sId=Nn()?.id||e.message?.sessionID;if(!sId)return;",
+    "__oc_set_fk_l(!0);",
+    "try{",
+    "let sdk=nt(),srv=pt(),st=Jn(),nav=xn(),msgs=st.session.message.list(sId)||[];",
+    "let cIdx=msgs.findIndex(m=>m.id===e.message.id);",
+    "let bId=void 0;",
+    "if(cIdx!==-1){let nu=msgs.slice(cIdx+1).find(m=>m.type==='user');nu&&(bId=nu.id)}",
+    "let fk=await sdk.api.session.fork({sessionID:sId,before:bId});",
+    "if(fk?.id){",
+    "let curS=st.session.get(sId),isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';",
+    "let rawT=curS?.title||(isZh?'新会话':'New Session');",
+    "let clnT=rawT.replace(/\\s*\\((?:分支(?:\\s*\\d+)?|branch(?:\\s*\\d+)?|fork(?:\\s*#?\\d+)?)\\)$/i,'').trim();",
+    "let allS=st.session.list()||[];",
+    "let esc=clnT.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&');",
+    "let bRe=new RegExp('^'+esc+' \\\\('+tag+'(?: (\\\\d+))?\\\\)$'),has1=!1,maxN=1;",
+    "for(let s of allS){if(!s?.title)continue;let m=s.title.match(bRe);m&&(m[1]===void 0?has1=!0:(maxN=Math.max(maxN,parseInt(m[1],10))))}",
+    "let nTitle=!has1?(clnT+' ('+tag+')'):(clnT+' ('+tag+' '+(maxN+1)+')');",
+    "await sdk.api.session.update({sessionID:fk.id,title:nTitle}).catch(()=>{});",
+    "fk.title=nTitle;",
+    "st.session.remember(fk);",
+    "nav(M(srv.key,fk.id));",
+    "}",
+    "}catch(err){",
+    "let msg=err instanceof Error?err.message:String(err);",
+    "Ot({title:n.t('common.requestFailed'),description:msg});",
+    "}finally{",
+    "__oc_set_fk_l(!1);",
+    "}",
+    "},",
+    "__oc_fork_lbl=()=>{",
+    "let isZh=n.locale()?.startsWith('zh')??!0;",
+    "return __oc_fk_l()?(isZh?'正在分支...':'Branching...'):(isZh?'分支到新聊天':'Branch to new chat');",
+    "};",
+  ].join("");
+
+  const jsxTarget =
+    'var e=ef();return G(e,X(sf,{get icon(){return l()?`check`:`copy`},get label(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)},onMouseDown:e=>e.preventDefault(),onClick:d,get"aria-label"(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)}}),null),G(e,X(R,{get when(){return c()},get children(){var e=$d();return G(e,c),e}}),null),x(()=>U(e,`data-interrupted`,i()?``:void 0)),e';
+
+  const jsxInject = [
+    'var e=ef();return ',
+    'G(e,X(sf,{get icon(){return l()?`check`:`copy`},get label(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)},onMouseDown:e=>e.preventDefault(),onClick:d,get"aria-label"(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)}}),null),',
+    'G(e,X(sf,{icon:`fork`,get label(){return __oc_fork_lbl()},get disabled(){return __oc_fk_l()},onMouseDown:e=>e.preventDefault(),onClick:__oc_fork,get"aria-label"(){return __oc_fork_lbl()}}),null),',
+    'G(e,X(R,{get when(){return c()},get children(){var e=$d();return G(e,c),e}}),null),',
+    'x(()=>U(e,`data-interrupted`,i()?``:void 0)),',
+    'e',
+  ].join("");
+
+  if (out.includes(declTarget) && out.includes(jsxTarget)) {
+    out = out.replace(declTarget, declInject).replace(jsxTarget, jsxInject);
+  } else {
+    throw new Error("Could not locate assistant message copy footer in route bundle.");
   }
 
   return out;
