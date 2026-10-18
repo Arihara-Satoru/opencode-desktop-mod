@@ -1248,9 +1248,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       const b64 = extractBase64(img);
       if (!b64) return null;
       return {
-        data: b64,
-        mime: img.mime || "image/png",
-        source: { type: "inline" },
+        uri: `data:${img.mime || "image/png"};base64,${b64}`,
         name: img.name || "image.png",
       };
     })
@@ -1332,6 +1330,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       let completedParts = "";
       let currentPart = "";
       let stepErrorMsg = "";
+      let sessionCreated = false;
 
       const getCombinedText = () =>
         completedParts && currentPart
@@ -1379,10 +1378,25 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
               stepErrorMsg = evt.data?.error?.message || "生成步骤失败";
               break;
             }
+            case "session.retry.scheduled": {
+              // The server retries failing provider requests indefinitely without emitting execution.failed.
+              stepErrorMsg = evt.data?.error?.message || stepErrorMsg || "模型请求失败";
+              if ((evt.data?.attempt ?? 0) >= 4) {
+                client.session.interrupt?.({ sessionID: tempSessionId }, reqOptions).catch(() => {});
+                streamedText = getCombinedText();
+                if (streamedText) resolveDone(streamedText);
+                else rejectDone(new Error(`${stepErrorMsg}（已重试多次，请换一个模型再试）`));
+              }
+              break;
+            }
             case "session.execution.succeeded":
             case "session.execution.interrupted": {
               streamedText = getCombinedText();
-              resolveDone(streamedText);
+              if (!streamedText && !controller.signal.aborted) {
+                rejectDone(new Error(stepErrorMsg || "模型没有返回任何内容"));
+              } else {
+                resolveDone(streamedText);
+              }
               break;
             }
             case "session.execution.failed": {
@@ -1415,7 +1429,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
         }
 
         const onAbort = () => {
-          client.session.interrupt?.({ sessionID: tempSessionId }).catch(() => {});
+          client.session.interrupt?.({ sessionID: tempSessionId }, reqOptions).catch(() => {});
           resolveDone(getCombinedText());
         };
         controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -1431,6 +1445,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
           },
           reqOptions
         );
+        sessionCreated = true;
 
         await client.session.prompt(
           {
@@ -1445,15 +1460,17 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
         controller.signal.removeEventListener("abort", onAbort);
         sseHandled = true;
       } catch (sseErr) {
-        if (controller.signal.aborted || streamedText.length > 0) {
+        if (controller.signal.aborted || streamedText.length > 0 || sessionCreated || promptFiles.length > 0) {
           throw sseErr;
         }
-        // If session.create failed and no tokens were streamed yet, fall through to stateless generate
+        // Only fall back to stateless generate when the ephemeral session could not even be created
       } finally {
         try {
           unlisten?.();
         } catch {}
-        client.session.remove?.({ sessionID: tempSessionId }).catch(() => {});
+        if (sessionCreated) {
+          client.session.remove?.({ sessionID: tempSessionId }, reqOptions).catch(() => {});
+        }
       }
     }
 
