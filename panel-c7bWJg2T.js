@@ -795,6 +795,24 @@ const COMPANION_CSS = `
 .oc-btw-asst:hover .oc-btw-asst-footer {
   opacity: 1;
 }
+
+.oc-btw-asst[data-streaming="true"] .min-w-0 > p:last-child::after,
+.oc-btw-asst[data-streaming="true"] .min-w-0 > *:last-child:not(pre):not(ul):not(ol)::after,
+.oc-btw-asst[data-streaming="true"] .min-w-0 li:last-child::after {
+  content: "▋";
+  display: inline-block;
+  color: var(--v2-text-text-base, currentColor);
+  margin-left: 3px;
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: baseline;
+  animation: oc-btw-cursor-blink 0.8s infinite;
+}
+
+@keyframes oc-btw-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
 `;
 
 function ensureStyles() {
@@ -1279,37 +1297,116 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
   const controller = new AbortController();
   activeAbortControllers.set(abortKey, controller);
 
-  let streamedText = "";
+  let rawTargetText = "";
+  let displayedText = "";
   let streamedReasoning = "";
-  let rafId = null;
+  let isStreamFinished = false;
+  let typewriterTimer = null;
+
+  const stopTypewriter = () => {
+    if (typewriterTimer !== null) {
+      cancelAnimationFrame(typewriterTimer);
+      typewriterTimer = null;
+    }
+  };
+
+  const tickTypewriter = () => {
+    typewriterTimer = null;
+    if (controller.signal.aborted) return;
+
+    const remaining = rawTargetText.length - displayedText.length;
+    if (remaining > 0) {
+      let step;
+      if (isStreamFinished) {
+        step = Math.max(3, Math.ceil(remaining / 4));
+      } else if (remaining <= 4) {
+        step = 1;
+      } else if (remaining <= 14) {
+        step = 2;
+      } else if (remaining <= 35) {
+        step = 3;
+      } else if (remaining <= 70) {
+        step = 5;
+      } else {
+        step = Math.min(remaining, Math.max(8, Math.ceil(remaining / 8)));
+      }
+
+      const nextLen = Math.min(rawTargetText.length, displayedText.length + step);
+      displayedText = rawTargetText.slice(0, nextLen);
+
+      setMsgLiveState((prev) => ({
+        ...prev,
+        text: displayedText,
+        reasoning: streamedReasoning,
+        pending: displayedText.length === 0,
+        streaming: true,
+      }));
+      scrollBottomIfPinnedCallback?.();
+    }
+
+    if (displayedText.length < rawTargetText.length) {
+      typewriterTimer = requestAnimationFrame(tickTypewriter);
+    } else if (isStreamFinished) {
+      setMsgLiveState((prev) => ({
+        ...prev,
+        text: displayedText,
+        reasoning: streamedReasoning,
+        pending: false,
+        streaming: false,
+      }));
+      scrollBottomIfPinnedCallback?.();
+    }
+  };
+
+  const pushTargetText = (newFullText) => {
+    rawTargetText = newFullText || "";
+    if (typewriterTimer === null && displayedText.length < rawTargetText.length) {
+      typewriterTimer = requestAnimationFrame(tickTypewriter);
+    }
+  };
+
+  const drainTypewriter = async (finalFullText) => {
+    if (finalFullText !== undefined) {
+      rawTargetText = finalFullText || "";
+    }
+    isStreamFinished = true;
+    if (displayedText.length >= rawTargetText.length) {
+      stopTypewriter();
+      setMsgLiveState((prev) => ({
+        ...prev,
+        text: displayedText,
+        reasoning: streamedReasoning,
+        pending: false,
+        streaming: false,
+      }));
+      scrollBottomIfPinnedCallback?.();
+    } else {
+      if (typewriterTimer === null) {
+        typewriterTimer = requestAnimationFrame(tickTypewriter);
+      }
+      while (displayedText.length < rawTargetText.length && !controller.signal.aborted) {
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      stopTypewriter();
+      displayedText = rawTargetText;
+    }
+  };
 
   const flushLiveStreamState = (patch = {}) => {
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
+    stopTypewriter();
+    if (patch.text !== undefined) {
+      displayedText = patch.text;
+      rawTargetText = patch.text;
+    } else {
+      displayedText = rawTargetText;
     }
     setMsgLiveState((prev) => ({
       ...prev,
-      text: streamedText,
+      text: displayedText,
       reasoning: streamedReasoning,
       ...patch,
     }));
     scrollBottomIfPinnedCallback?.();
-  };
-
-  const scheduleLiveStreamUpdate = () => {
-    if (rafId !== null) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
-      setMsgLiveState((prev) => ({
-        ...prev,
-        text: streamedText,
-        reasoning: streamedReasoning,
-        pending: streamedText.length === 0,
-        streaming: true,
-      }));
-      scrollBottomIfPinnedCallback?.();
-    });
   };
 
   try {
@@ -1350,7 +1447,10 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
           switch (evt.type) {
             case "session.reasoning.delta": {
               streamedReasoning += evt.data.delta || "";
-              scheduleLiveStreamUpdate();
+              setMsgLiveState((prev) => ({
+                ...prev,
+                reasoning: streamedReasoning,
+              }));
               break;
             }
             case "session.text.started": {
@@ -1362,16 +1462,14 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
             }
             case "session.text.delta": {
               currentPart += evt.data.delta || "";
-              streamedText = getCombinedText();
-              scheduleLiveStreamUpdate();
+              pushTargetText(getCombinedText());
               break;
             }
             case "session.text.ended": {
               const partFinal = evt.data.text ?? currentPart;
               completedParts = completedParts ? `${completedParts}\n\n${partFinal}` : partFinal;
               currentPart = "";
-              streamedText = completedParts;
-              scheduleLiveStreamUpdate();
+              pushTargetText(completedParts);
               break;
             }
             case "session.step.failed": {
@@ -1383,27 +1481,27 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
               stepErrorMsg = evt.data?.error?.message || stepErrorMsg || "模型请求失败";
               if ((evt.data?.attempt ?? 0) >= 4) {
                 client.session.interrupt?.({ sessionID: tempSessionId }, reqOptions).catch(() => {});
-                streamedText = getCombinedText();
-                if (streamedText) resolveDone(streamedText);
+                const combined = getCombinedText();
+                if (combined) resolveDone(combined);
                 else rejectDone(new Error(`${stepErrorMsg}（已重试多次，请换一个模型再试）`));
               }
               break;
             }
             case "session.execution.succeeded":
             case "session.execution.interrupted": {
-              streamedText = getCombinedText();
-              if (!streamedText && !controller.signal.aborted) {
+              const combined = getCombinedText();
+              if (!combined && !controller.signal.aborted) {
                 rejectDone(new Error(stepErrorMsg || "模型没有返回任何内容"));
               } else {
-                resolveDone(streamedText);
+                resolveDone(combined);
               }
               break;
             }
             case "session.execution.failed": {
               const errMsg = evt.data?.error?.message || stepErrorMsg || "流式请求失败";
-              streamedText = getCombinedText();
-              if (streamedText) {
-                resolveDone(streamedText);
+              const combined = getCombinedText();
+              if (combined) {
+                resolveDone(combined);
               } else {
                 rejectDone(new Error(errMsg));
               }
@@ -1430,6 +1528,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
 
         const onAbort = () => {
           client.session.interrupt?.({ sessionID: tempSessionId }, reqOptions).catch(() => {});
+          stopTypewriter();
           resolveDone(getCombinedText());
         };
         controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -1458,9 +1557,11 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
 
         answerText = await donePromise;
         controller.signal.removeEventListener("abort", onAbort);
+        await drainTypewriter(answerText);
         sseHandled = true;
       } catch (sseErr) {
-        if (controller.signal.aborted || streamedText.length > 0 || sessionCreated || promptFiles.length > 0) {
+        stopTypewriter();
+        if (controller.signal.aborted || displayedText.length > 0 || rawTargetText.length > 0 || sessionCreated || promptFiles.length > 0) {
           throw sseErr;
         }
         // Only fall back to stateless generate when the ephemeral session could not even be created
@@ -1524,10 +1625,14 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       } else {
         throw new Error("未连接到生成服务");
       }
+      if (answerText) {
+        await drainTypewriter(answerText);
+      }
     }
 
     if (controller.signal.aborted) {
-      const partial = (streamedText || answerText || "").trim() || "_（已停止）_";
+      stopTypewriter();
+      const partial = (displayedText || rawTargetText || answerText || "").trim() || "_（已停止）_";
       flushLiveStreamState({ text: partial, pending: false, streaming: false, error: undefined });
       store.setState((prev) => ({
         ...prev,
@@ -1545,8 +1650,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       return;
     }
 
-    const finalClean = (answerText || streamedText || "").trim() || "_（无返回内容）_";
-    streamedText = finalClean;
+    const finalClean = (answerText || rawTargetText || displayedText || "").trim() || "_（无返回内容）_";
     flushLiveStreamState({ text: finalClean, pending: false, streaming: false, error: undefined });
 
     store.setState((prev) => ({
@@ -1566,8 +1670,9 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       ),
     }));
   } catch (err) {
+    stopTypewriter();
     if (controller.signal.aborted) {
-      const partial = (streamedText || "").trim() || "_（已停止）_";
+      const partial = (displayedText || rawTargetText || "").trim() || "_（已停止）_";
       flushLiveStreamState({ text: partial, pending: false, streaming: false, error: undefined });
       store.setState((prev) => ({
         ...prev,
@@ -1600,10 +1705,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       ),
     }));
   } finally {
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
-    }
+    stopTypewriter();
     setStreamActivityTick((v) => v + 1);
     if (activeAbortControllers.get(abortKey) === controller) {
       activeAbortControllers.delete(abortKey);
@@ -1959,6 +2061,11 @@ function BtwPanel(props) {
           return sig ? sig.get() : msg;
         };
 
+        createEffect(() => {
+          const isStreaming = Boolean(liveState().streaming);
+          asstWrap.setAttribute("data-streaming", isStreaming ? "true" : "false");
+        });
+
         // 1. Shimmer while waiting for first token
         insert(
           asstWrap,
@@ -2042,6 +2149,10 @@ function BtwPanel(props) {
                   get text() {
                     return liveState().text || "";
                   },
+                  get streaming() {
+                    return Boolean(liveState().streaming);
+                  },
+                  deferUntilReady: true,
                   class: "text-14-regular",
                 }),
                 null
