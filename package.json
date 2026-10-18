@@ -1,0 +1,19 @@
+{
+  "name": "opencode-desktop-mod",
+  "version": "1.0.0",
+  "description": "Minimalist left timeline scrubber and upgraded /btw companion chat mod for OpenCode Desktop (v2.0.32+)",
+  "type": "module",
+  "scripts": {
+    "apply": "node apply-mod.mjs",
+    "restore": "node apply-mod.mjs --restore"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-desktop",
+    "timeline",
+    "btw",
+    "electron-mod"
+  ],
+  "author": "",
+  "license": "MIT"
+}
