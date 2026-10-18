@@ -104,6 +104,21 @@ function patchMainBundle(src) {
   ].join("");
 
   out = out.slice(0, iStart) + replacementIse + out.slice(iEnd + iseEndMarker.length);
+
+  // 3. Isolate ephemeral `ses_btw_*` SSE streaming sessions from main store & notifications
+  if (out.includes("function de(e){switch(e.type){")) {
+    out = out.replace(
+      "function de(e){switch(e.type){",
+      'function de(e){if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;switch(e.type){'
+    );
+  }
+  if (out.includes("D=e.sdk.event.listen(e=>{")) {
+    out = out.replace(
+      "D=e.sdk.event.listen(e=>{",
+      'D=e.sdk.event.listen(e=>{if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
+    );
+  }
+
   return out;
 }
 

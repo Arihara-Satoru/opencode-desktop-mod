@@ -738,6 +738,9 @@ function updatePrefs(patch) {
 
 const sessionStoreMap = new Map();
 const activeAbortControllers = new Map();
+const liveMessageSignals = new Map();
+const [streamActivityTick, setStreamActivityTick] = createSignal(0);
+let scrollBottomIfPinnedCallback = null;
 
 function createDefaultThread() {
   return {
@@ -942,6 +945,16 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
   };
 
   const assistantMsgId = crypto.randomUUID();
+  const [msgLiveState, setMsgLiveState] = createSignal({
+    text: "",
+    reasoning: "",
+    pending: true,
+    streaming: false,
+    error: undefined,
+  });
+  liveMessageSignals.set(assistantMsgId, { get: msgLiveState, set: setMsgLiveState });
+  setStreamActivityTick((v) => v + 1);
+
   const assistantMsg = {
     id: assistantMsgId,
     role: "assistant",
@@ -1008,65 +1021,255 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
   const controller = new AbortController();
   activeAbortControllers.set(abortKey, controller);
 
+  let streamedText = "";
+  let streamedReasoning = "";
+  let rafId = null;
+
+  const flushLiveStreamState = (patch = {}) => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    setMsgLiveState((prev) => ({
+      ...prev,
+      text: streamedText,
+      reasoning: streamedReasoning,
+      ...patch,
+    }));
+    scrollBottomIfPinnedCallback?.();
+  };
+
+  const scheduleLiveStreamUpdate = () => {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      setMsgLiveState((prev) => ({
+        ...prev,
+        text: streamedText,
+        reasoning: streamedReasoning,
+        pending: streamedText.length === 0,
+        streaming: true,
+      }));
+      scrollBottomIfPinnedCallback?.();
+    });
+  };
+
   try {
     let answerText = "";
     const client = session.server?.client;
+    const dataBus = session.server?.data;
     const directory = session.location?.directory || session.directory;
     const reqOptions = {
       signal: controller.signal,
       headers: directory ? { "x-opencode-directory": encodeURIComponent(directory) } : undefined,
     };
 
-    if (contextMode === "full" && !prefs.modelKey && client?.session?.generate) {
-      const res = await client.session.generate(
-        {
-          sessionID: session.id,
-          prompt: [
-            SYSTEM_INSTRUCTION,
-            priorHistory ? `前序对话：\n${priorHistory}` : "",
-            `${currentQuotesBlock}问题：${finalUserText}`,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        },
-        { signal: controller.signal }
-      );
-      answerText = res?.text || "";
-    } else if (client?.generate?.text && resolvedModel) {
+    // Primary Path: True Real-Time SSE Streaming via Isolated Ephemeral Session (`ses_btw_*`)
+    let sseHandled = false;
+    if (client?.session?.create && client?.session?.prompt && (dataBus?.listen || client?.event?.subscribe)) {
+      const tempSessionId = `ses_btw_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+      let unlisten = null;
+      let completedParts = "";
+      let currentPart = "";
+      let stepErrorMsg = "";
+
+      const getCombinedText = () =>
+        completedParts && currentPart
+          ? `${completedParts}\n\n${currentPart}`
+          : completedParts || currentPart;
+
       try {
-        const res = await client.generate.text(
+        let resolveDone;
+        let rejectDone;
+        const donePromise = new Promise((res, rej) => {
+          resolveDone = res;
+          rejectDone = rej;
+        });
+
+        const handleSseEvent = (evt) => {
+          if (!evt || evt.data?.sessionID !== tempSessionId) return;
+          switch (evt.type) {
+            case "session.reasoning.delta": {
+              streamedReasoning += evt.data.delta || "";
+              scheduleLiveStreamUpdate();
+              break;
+            }
+            case "session.text.started": {
+              if (currentPart) {
+                completedParts = completedParts ? `${completedParts}\n\n${currentPart}` : currentPart;
+                currentPart = "";
+              }
+              break;
+            }
+            case "session.text.delta": {
+              currentPart += evt.data.delta || "";
+              streamedText = getCombinedText();
+              scheduleLiveStreamUpdate();
+              break;
+            }
+            case "session.text.ended": {
+              const partFinal = evt.data.text ?? currentPart;
+              completedParts = completedParts ? `${completedParts}\n\n${partFinal}` : partFinal;
+              currentPart = "";
+              streamedText = completedParts;
+              scheduleLiveStreamUpdate();
+              break;
+            }
+            case "session.step.failed": {
+              stepErrorMsg = evt.data?.error?.message || "生成步骤失败";
+              break;
+            }
+            case "session.execution.succeeded":
+            case "session.execution.interrupted": {
+              streamedText = getCombinedText();
+              resolveDone(streamedText);
+              break;
+            }
+            case "session.execution.failed": {
+              const errMsg = evt.data?.error?.message || stepErrorMsg || "流式请求失败";
+              streamedText = getCombinedText();
+              if (streamedText) {
+                resolveDone(streamedText);
+              } else {
+                rejectDone(new Error(errMsg));
+              }
+              break;
+            }
+          }
+        };
+
+        if (typeof dataBus?.listen === "function") {
+          unlisten = dataBus.listen((payload) => {
+            handleSseEvent(payload?.details || payload);
+          });
+        } else if (client?.event?.subscribe) {
+          const subAbort = new AbortController();
+          unlisten = () => subAbort.abort();
+          (async () => {
+            try {
+              for await (const ev of client.event.subscribe({ signal: subAbort.signal })) {
+                handleSseEvent(ev);
+              }
+            } catch {}
+          })();
+        }
+
+        const onAbort = () => {
+          client.session.interrupt?.({ sessionID: tempSessionId }).catch(() => {});
+          resolveDone(getCombinedText());
+        };
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+
+        await client.session.create(
           {
-            prompt: assembledPrompt,
+            id: tempSessionId,
+            parentID: session.id,
+            title: "/btw",
             model: resolvedModel,
+            location: directory ? { directory } : undefined,
+            permissions: [{ action: "*", resource: "*", effect: "deny" }],
           },
           reqOptions
         );
+
+        await client.session.prompt(
+          {
+            sessionID: tempSessionId,
+            text: assembledPrompt,
+          },
+          reqOptions
+        );
+
+        answerText = await donePromise;
+        controller.signal.removeEventListener("abort", onAbort);
+        sseHandled = true;
+      } catch (sseErr) {
+        if (controller.signal.aborted || streamedText.length > 0) {
+          throw sseErr;
+        }
+        // If session.create failed and no tokens were streamed yet, fall through to stateless generate
+      } finally {
+        try {
+          unlisten?.();
+        } catch {}
+        client.session.remove?.({ sessionID: tempSessionId }).catch(() => {});
+      }
+    }
+
+    // Fallback Path: Stateless generate.text / session.generate if SSE session creation was unsupported
+    if (!sseHandled && !controller.signal.aborted) {
+      if (contextMode === "full" && !prefs.modelKey && client?.session?.generate) {
+        const res = await client.session.generate(
+          {
+            sessionID: session.id,
+            prompt: [
+              SYSTEM_INSTRUCTION,
+              priorHistory ? `前序对话：\n${priorHistory}` : "",
+              `${currentQuotesBlock}问题：${finalUserText}`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          },
+          { signal: controller.signal }
+        );
         answerText = res?.text || "";
-      } catch (genErr) {
-        if (controller.signal.aborted) throw genErr;
-        const resFallback = await client.session.generate(
+      } else if (client?.generate?.text && resolvedModel) {
+        try {
+          const res = await client.generate.text(
+            {
+              prompt: assembledPrompt,
+              model: resolvedModel,
+            },
+            reqOptions
+          );
+          answerText = res?.text || "";
+        } catch (genErr) {
+          if (controller.signal.aborted) throw genErr;
+          const resFallback = await client.session.generate(
+            {
+              sessionID: session.id,
+              prompt: assembledPrompt,
+            },
+            { signal: controller.signal }
+          );
+          answerText = resFallback?.text || "";
+        }
+      } else if (client?.session?.generate) {
+        const res = await client.session.generate(
           {
             sessionID: session.id,
             prompt: assembledPrompt,
           },
           { signal: controller.signal }
         );
-        answerText = resFallback?.text || "";
+        answerText = res?.text || "";
+      } else {
+        throw new Error("未连接到生成服务");
       }
-    } else if (client?.session?.generate) {
-      const res = await client.session.generate(
-        {
-          sessionID: session.id,
-          prompt: assembledPrompt,
-        },
-        { signal: controller.signal }
-      );
-      answerText = res?.text || "";
-    } else {
-      throw new Error("未连接到生成服务");
     }
 
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted) {
+      const partial = (streamedText || answerText || "").trim() || "_（已停止）_";
+      flushLiveStreamState({ text: partial, pending: false, streaming: false, error: undefined });
+      store.setState((prev) => ({
+        ...prev,
+        threads: prev.threads.map((t) =>
+          t.id === thread.id
+            ? {
+                ...t,
+                messages: t.messages.map((m) =>
+                  m.id === assistantMsgId ? { ...m, text: partial, pending: false } : m
+                ),
+              }
+            : t
+        ),
+      }));
+      return;
+    }
+
+    const finalClean = (answerText || streamedText || "").trim() || "_（无返回内容）_";
+    streamedText = finalClean;
+    flushLiveStreamState({ text: finalClean, pending: false, streaming: false, error: undefined });
 
     store.setState((prev) => ({
       ...prev,
@@ -1077,7 +1280,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
               updatedAt: Date.now(),
               messages: t.messages.map((m) =>
                 m.id === assistantMsgId
-                  ? { ...m, text: (answerText || "").trim() || "_（无返回内容）_", pending: false, error: undefined }
+                  ? { ...m, text: finalClean, pending: false, error: undefined }
                   : m
               ),
             }
@@ -1086,6 +1289,8 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
     }));
   } catch (err) {
     if (controller.signal.aborted) {
+      const partial = (streamedText || "").trim() || "_（已停止）_";
+      flushLiveStreamState({ text: partial, pending: false, streaming: false, error: undefined });
       store.setState((prev) => ({
         ...prev,
         threads: prev.threads.map((t) =>
@@ -1093,7 +1298,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
             ? {
                 ...t,
                 messages: t.messages.map((m) =>
-                  m.id === assistantMsgId ? { ...m, text: m.text || "_（已停止）_", pending: false } : m
+                  m.id === assistantMsgId ? { ...m, text: partial, pending: false } : m
                 ),
               }
             : t
@@ -1102,6 +1307,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
       return;
     }
     const errMsg = err instanceof Error ? err.message : String(err);
+    flushLiveStreamState({ text: "", pending: false, streaming: false, error: errMsg || "请求失败" });
     store.setState((prev) => ({
       ...prev,
       threads: prev.threads.map((t) =>
@@ -1116,6 +1322,11 @@ async function sendBtwMessage({ session, threadId, text, quotes, legacyChatsAcce
       ),
     }));
   } finally {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    setStreamActivityTick((v) => v + 1);
     if (activeAbortControllers.get(abortKey) === controller) {
       activeAbortControllers.delete(abortKey);
     }
@@ -1165,7 +1376,13 @@ function BtwPanel(props) {
 
   const activeMessages = createMemo(() => activeThread()?.messages || []);
   const draftQuotes = createMemo(() => activeThread()?.quotes || []);
-  const isThreadGenerating = createMemo(() => activeMessages().some((m) => m.pending));
+  const isThreadGenerating = createMemo(() => {
+    streamActivityTick();
+    return activeMessages().some((m) => {
+      const live = liveMessageSignals.get(m.id)?.get?.();
+      return live ? live.pending || live.streaming : m.pending;
+    });
+  });
 
   const [inputValue, setInputValue] = createSignal("");
   const [copiedId, setCopiedId] = createSignal("");
@@ -1342,14 +1559,23 @@ function BtwPanel(props) {
   messagesScroll.className = "flex-1 min-h-0 overflow-y-auto px-4 py-4 select-text flex flex-col gap-5";
   messagesScroll.style.scrollbarWidth = "thin";
 
-  const scrollToBottom = () => {
+  const scrollToBottom = (onlyIfNearBottom = false) => {
     requestAnimationFrame(() => {
+      if (onlyIfNearBottom) {
+        const dist = messagesScroll.scrollHeight - messagesScroll.scrollTop - messagesScroll.clientHeight;
+        if (dist > 140) return;
+      }
       messagesScroll.scrollTop = messagesScroll.scrollHeight;
     });
   };
 
+  scrollBottomIfPinnedCallback = () => scrollToBottom(true);
+  onCleanup(() => {
+    if (scrollBottomIfPinnedCallback) scrollBottomIfPinnedCallback = null;
+  });
+
   createEffect(() => {
-    if (activeMessages().length > 0) scrollToBottom();
+    if (activeMessages().length > 0) scrollToBottom(false);
   });
 
   // Minimalist Empty State (matches original panel-c7bWJg2T.js)
@@ -1412,110 +1638,157 @@ function BtwPanel(props) {
           return userWrap;
         }
 
-        // Assistant response (clean borderless Markdown like main chat)
+        // Assistant response (Reactive to real-time SSE token deltas)
         const asstWrap = document.createElement("div");
         asstWrap.className = "oc-btw-asst";
 
-        if (msg.pending) {
-          const working = document.createElement("div");
-          working.className = "flex h-7 items-center text-[13px] font-[530] leading-text-compact";
-          insert(
-            working,
-            createComponent(TextShimmer, {
-              get text() {
-                return ext.t("session.timeline.working") || "Thinking…";
-              },
-              active: true,
-            }),
-            null
-          );
-          asstWrap.appendChild(working);
-          return asstWrap;
-        }
+        const liveState = () => {
+          const sig = liveMessageSignals.get(msg.id);
+          return sig ? sig.get() : msg;
+        };
 
-        if (msg.error) {
-          const errRow = document.createElement("div");
-          errRow.className = "flex items-center justify-between gap-2 rounded-lg bg-v2-background-bg-layer-02 px-3 py-2 text-[13px] text-v2-text-text-muted";
-          const errText = document.createElement("span");
-          errText.className = "truncate";
-          errText.textContent = msg.error;
-          errRow.appendChild(errText);
-          insert(
-            errRow,
-            createComponent(Button, {
-              size: "small",
-              variant: "outline",
-              onClick: () => retryAssistantMessage(msg.id),
-              get children() {
-                return ext.t("retry") || "重试";
-              },
-            }),
-            null
-          );
-          asstWrap.appendChild(errRow);
-          return asstWrap;
-        }
-
-        const mdContainer = document.createElement("div");
-        mdContainer.className = "min-w-0";
+        // 1. Shimmer while waiting for first token
         insert(
-          mdContainer,
-          createComponent(Markdown, {
-            get text() {
-              return msg.text || "";
-            },
-            class: "text-14-regular",
-          }),
-          null
-        );
-
-        const footerBar = document.createElement("div");
-        footerBar.className = "oc-btw-asst-footer";
-
-        const metaSpan = document.createElement("span");
-        metaSpan.className = "text-[11px] text-v2-text-text-faint truncate select-none";
-        metaSpan.textContent = msg.modelLabel || "";
-
-        const btnGroup = document.createElement("div");
-        btnGroup.className = "flex items-center gap-1";
-
-        insert(
-          btnGroup,
-          createComponent(Tooltip, {
-            get value() {
-              return copiedId() === msg.id ? ext.t("common.copied") || "已复制" : ext.t("copy") || "复制";
+          asstWrap,
+          createComponent(Show, {
+            get when() {
+              const st = liveState();
+              return Boolean(st.pending && !st.text && !st.error);
             },
             get children() {
-              return createComponent(IconButton, {
-                size: "small",
-                variant: "ghost-muted",
-                get icon() {
-                  return createComponent(Icon, {
-                    get name() {
-                      return copiedId() === msg.id ? "check" : "outline-copy";
-                    },
-                  });
-                },
-                onClick: () => {
-                  if (!msg.text) return;
-                  system
-                    .copy(msg.text)
-                    .then(() => {
-                      setCopiedId(msg.id);
-                      setTimeout(() => {
-                        if (copiedId() === msg.id) setCopiedId("");
-                      }, 1800);
-                    })
-                    .catch(() => showToast({ title: ext.t("common.requestFailed") }));
-                },
-              });
+              const working = document.createElement("div");
+              working.className = "flex h-7 items-center text-[13px] font-[530] leading-text-compact";
+              insert(
+                working,
+                createComponent(TextShimmer, {
+                  get text() {
+                    const st = liveState();
+                    return st.reasoning
+                      ? "思考中…"
+                      : ext.t("session.timeline.working") || "Thinking…";
+                  },
+                  active: true,
+                }),
+                null
+              );
+              return working;
             },
           }),
           null
         );
 
-        footerBar.append(metaSpan, btnGroup);
-        asstWrap.append(mdContainer, footerBar);
+        // 2. Error banner if failed with no partial text
+        insert(
+          asstWrap,
+          createComponent(Show, {
+            get when() {
+              const st = liveState();
+              return Boolean(st.error && !st.text);
+            },
+            get children() {
+              const errRow = document.createElement("div");
+              errRow.className =
+                "flex items-center justify-between gap-2 rounded-lg bg-v2-background-bg-layer-02 px-3 py-2 text-[13px] text-v2-text-text-muted";
+              const errText = document.createElement("span");
+              errText.className = "truncate";
+              insert(errText, () => liveState().error || "请求失败", null);
+              errRow.appendChild(errText);
+              insert(
+                errRow,
+                createComponent(Button, {
+                  size: "small",
+                  variant: "outline",
+                  onClick: () => retryAssistantMessage(msg.id),
+                  get children() {
+                    return ext.t("retry") || "重试";
+                  },
+                }),
+                null
+              );
+              return errRow;
+            },
+          }),
+          null
+        );
+
+        // 3. Live-streaming & completed Markdown content
+        insert(
+          asstWrap,
+          createComponent(Show, {
+            get when() {
+              return Boolean(liveState().text);
+            },
+            get children() {
+              const contentFrag = document.createElement("div");
+              contentFrag.className = "oc-btw-asst";
+
+              const mdContainer = document.createElement("div");
+              mdContainer.className = "min-w-0";
+              insert(
+                mdContainer,
+                createComponent(Markdown, {
+                  get text() {
+                    return liveState().text || "";
+                  },
+                  class: "text-14-regular",
+                }),
+                null
+              );
+
+              const footerBar = document.createElement("div");
+              footerBar.className = "oc-btw-asst-footer";
+
+              const metaSpan = document.createElement("span");
+              metaSpan.className = "text-[11px] text-v2-text-text-faint truncate select-none";
+              metaSpan.textContent = msg.modelLabel || "";
+
+              const btnGroup = document.createElement("div");
+              btnGroup.className = "flex items-center gap-1";
+
+              insert(
+                btnGroup,
+                createComponent(Tooltip, {
+                  get value() {
+                    return copiedId() === msg.id ? ext.t("common.copied") || "已复制" : ext.t("copy") || "复制";
+                  },
+                  get children() {
+                    return createComponent(IconButton, {
+                      size: "small",
+                      variant: "ghost-muted",
+                      get icon() {
+                        return createComponent(Icon, {
+                          get name() {
+                            return copiedId() === msg.id ? "check" : "outline-copy";
+                          },
+                        });
+                      },
+                      onClick: () => {
+                        const txt = liveState().text || msg.text;
+                        if (!txt) return;
+                        system
+                          .copy(txt)
+                          .then(() => {
+                            setCopiedId(msg.id);
+                            setTimeout(() => {
+                              if (copiedId() === msg.id) setCopiedId("");
+                            }, 1800);
+                          })
+                          .catch(() => showToast({ title: ext.t("common.requestFailed") }));
+                      },
+                    });
+                  },
+                }),
+                null
+              );
+
+              footerBar.append(metaSpan, btnGroup);
+              contentFrag.append(mdContainer, footerBar);
+              return contentFrag;
+            },
+          }),
+          null
+        );
+
         return asstWrap;
       },
     }),
