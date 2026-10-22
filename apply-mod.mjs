@@ -2,6 +2,7 @@
 /**
  * OpenCode Desktop UI Enhancement Patcher
  * Cross-platform patcher for Windows, macOS, and Linux
+ * Compatible with OpenCode Desktop v2.0.x ~ v2.1.x+
  *
  * Features injected:
  * 1. Left Session Timeline Navigation Bar (会话时间轴导航条)
@@ -20,6 +21,7 @@
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
  *   node apply-mod.mjs --restore  # Restore official app.asar from backup
+ *   node apply-mod.mjs --force    # Bypass running process check (restart app manually)
  */
 
 import fs from "node:fs";
@@ -98,11 +100,16 @@ function isProcessRunning(processName) {
   }
 }
 
-function ensureOpenCodeClosed() {
+function ensureOpenCodeClosed(force = false) {
   const procName = process.platform === "win32" ? "OpenCode.exe" : "OpenCode";
   if (isProcessRunning(procName)) {
+    if (force) {
+      console.log(`[提示] 检测到 OpenCode 正在运行，但已启用 --force 参数，跳过进程锁阻断。注入后请重启客户端生效。`);
+      return;
+    }
     console.error(`\n[错误] 检测到 OpenCode 桌面端正在运行 (${procName})！`);
-    console.error(`[提示] 为避免 app.asar 文件句柄被系统占用锁定 (EBUSY)，请先完全关闭 OpenCode 后再执行此脚本。\n`);
+    console.error(`[提示] 为避免 app.asar 文件句柄被系统占用锁定 (EBUSY)，请先完全关闭 OpenCode 后再执行此脚本。`);
+    console.error(`[提示] 如果确认当前未被占用，也可追加 --force 参数强制注入 (例如: node apply-mod.mjs --force)。\n`);
     process.exit(1);
   }
 }
@@ -172,78 +179,198 @@ function isAsarPatched(header, payload) {
   }
 }
 
-function patchMainBundle(src, panelFileName = "panel-c7bWJg2T.js") {
+function resolvePanelSymbols(origPanelSrc, origRouteSrc, origMainSrc) {
+  const panelImportMatch = origPanelSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
+  const panelImports = {};
+  if (panelImportMatch) {
+    for (const part of panelImportMatch[1].split(",")) {
+      const [orig, local] = part.trim().split(/\s+as\s+/);
+      panelImports[local || orig] = orig;
+    }
+  }
+
+  const routeImportMatch = origRouteSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
+  const routeImports = {};
+  if (routeImportMatch) {
+    for (const part of routeImportMatch[1].split(",")) {
+      const [orig, local] = part.trim().split(/\s+as\s+/);
+      routeImports[local || orig] = orig;
+    }
+  }
+
+  let forExport = "il";
+  const forMatch = origRouteSrc.match(/([a-zA-Z0-9_$]+)\s*,\s*\{get each\(\)/);
+  if (forMatch && routeImports[forMatch[1]]) {
+    forExport = routeImports[forMatch[1]];
+  }
+
+  let effectExport = "_l";
+  const effectMatch = origMainSrc.match(
+    /function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,!1,[a-zA-Z0-9_$]+\)\)\}/
+  );
+  const exportIdx = origMainSrc.lastIndexOf("export{");
+  const exportsStr = exportIdx !== -1 ? origMainSrc.slice(exportIdx) : "";
+  if (effectMatch) {
+    const m = exportsStr.match(new RegExp(`\\b${effectMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
+    if (m) effectExport = m[1];
+  }
+
+  let cleanupExport = "Dl";
+  const cleanupMatch = origMainSrc.match(
+    /function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)\{return [a-zA-Z0-9_$]+===null\|\|\([a-zA-Z0-9_$]+\.cleanups===null\?[a-zA-Z0-9_$]+\.cleanups=\[[a-zA-Z0-9_$]+\]:[a-zA-Z0-9_$]+\.cleanups\.push\([a-zA-Z0-9_$]+\)\),[a-zA-Z0-9_$]+\}/
+  );
+  if (cleanupMatch) {
+    const m = exportsStr.match(new RegExp(`\\b${cleanupMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
+    if (m) cleanupExport = m[1];
+  }
+
+  return {
+    onChange: panelImports["t"] || "El",
+    Tooltip: panelImports["i"] || "Pn",
+    useExtension: "Jr",
+    IconButton: panelImports["r"] || "Ln",
+    createMemo: panelImports["c"] || "gl",
+    ScrollView: panelImports["g"] || "wn",
+    Show: panelImports["m"] || "sl",
+    Icon: panelImports["l"] || "hi",
+    Match: panelImports["d"] || "ol",
+    memoBool: panelImports["a"] || "Yc",
+    Button: panelImports["e"] || "An",
+    createSignal: panelImports["o"] || "bl",
+    showToast: panelImports["f"] || "pi",
+    insert: panelImports["n"] || "Jc",
+    template: panelImports["h"] || "tl",
+    Switch: panelImports["u"] || "ll",
+    createComponent: panelImports["s"] || "fl",
+    For: forExport,
+    createEffect: effectExport,
+    onCleanup: cleanupExport,
+  };
+}
+
+function patchMainBundle(src, panelFileName, origPanelSrc) {
   let out = src;
 
   // 1. Widen default session-chat-panel width when right side panel is opened (600 -> 1080)
-  if (out.includes("tR=344,nR=200,rR=600,iR=280")) {
-    out = out.replace("tR=344,nR=200,rR=600,iR=280", "tR=344,nR=200,rR=1080,iR=280");
-  } else {
-    out = out.replace(
-      /([a-zA-Z0-9_$]+=344,[a-zA-Z0-9_$]+=200,)([a-zA-Z0-9_$]+=)600(,[a-zA-Z0-9_$]+=280)/,
-      "$1$21080$3"
-    );
-  }
-
-  // 2. Upgrade Ise (the built-in `btw` extension setup)
-  const iseStartMarker = `Ise=e=>{let t=Re(()=>G(()=>import(\`./${panelFileName}\`)`;
-  const iseStartRegex = new RegExp(
-    `([a-zA-Z0-9_$]+)=e=>\\{let ([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\\(\\(\\)=>([a-zA-Z0-9_$]+)\\(\\(\\)=>import\\([\\\`'"]\\.\\/${panelFileName.replace(".", "\\.")}[\\\`'"]\\)(?:,[^)]+)?\\)`
+  out = out.replace(
+    /([a-zA-Z0-9_$]+=344,[a-zA-Z0-9_$]+=200,)([a-zA-Z0-9_$]+=)600(,[a-zA-Z0-9_$]+=280)/,
+    "$1$21080$3"
   );
-  const iseEndMarker = "close:e=>{i.remove(e.session,e.tab.id),o.get(e.session.key)?.delete(e.tab.id)}})}";
 
-  let iStart = out.indexOf(iseStartMarker);
-  let matchedIseName = "Ise";
-  let matchedRe = "Re";
-  let matchedG = "G";
-
-  if (iStart === -1) {
-    const m = out.match(iseStartRegex);
-    if (m && m.index !== undefined) {
-      iStart = m.index;
-      matchedIseName = m[1];
-      matchedRe = m[3];
-      matchedG = m[4];
-    }
+  // 2. Locate btw extension setup function in main bundle
+  const importIdx = out.indexOf(`import(\`./${panelFileName}\`)`);
+  if (importIdx === -1) {
+    throw new Error(`Could not find import for ${panelFileName} in main bundle.`);
   }
 
-  let iEnd = iStart !== -1 ? out.indexOf(iseEndMarker, iStart) : -1;
-  let endMarkerLen = iseEndMarker.length;
-
-  if (iStart === -1 || iEnd === -1) {
-    // Try generic regex search for Ise function block
-    const fallbackMatch = out.match(
-      /([a-zA-Z0-9_$]+)=e=>\{let t=[a-zA-Z0-9_$]+\(\(\)=>[a-zA-Z0-9_$]+\(\(\)=>import\([`'"]\.\/panel-[^`'"]+[`'"]\)[^}]+close:[a-zA-Z0-9_$]+=>\{[^}]+\}\}\)\}/
-    );
-    if (fallbackMatch && fallbackMatch.index !== undefined) {
-      iStart = fallbackMatch.index;
-      iEnd = iStart + fallbackMatch[0].length;
-      endMarkerLen = 0;
-    } else {
-      throw new Error("Could not locate Ise (btw extension setup) in main bundle.");
-    }
+  const fnStartMatch = out
+    .slice(Math.max(0, importIdx - 150), importIdx)
+    .match(/([a-zA-Z0-9_$]+)=e=>\{let\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\(\)=>([a-zA-Z0-9_$]+)\(\(\)=>$/);
+  if (!fnStartMatch) {
+    throw new Error("Could not find function start for btw extension setup in main bundle.");
   }
+
+  const endPattern = /\.delete\([a-zA-Z0-9_$]+\.tab\.id\)\}\}\)\}/;
+  const endMatch = out.slice(importIdx).match(endPattern);
+  if (!endMatch) {
+    throw new Error("Could not find function end for btw extension setup in main bundle.");
+  }
+
+  const iStart = importIdx - fnStartMatch[0].length;
+  const iEnd = importIdx + endMatch.index + endMatch[0].length;
+  const fnBody = out.slice(iStart, iEnd);
+
+  const matchedIseName = fnStartMatch[1];
+  const matchedZe = fnStartMatch[3];
+  const matchedG = fnStartMatch[4];
 
   // Extract vite dependency mapping array if present in original import
-  const origSnippet = out.slice(iStart, Math.min(out.length, iStart + 250));
-  const mapDepsMatch = origSnippet.match(/__vite__mapDeps\(\[([0-9,\s]+)\]\)/);
+  const mapDepsMatch = fnBody.match(/__vite__mapDeps\(\[([0-9,\s]+)\]\)/);
   const mapDepsArg = mapDepsMatch ? `__vite__mapDeps([${mapDepsMatch[1]}]),` : "";
+
+  const preloadMatch = fnBody.match(
+    /([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\(\(\)=>void [a-zA-Z0-9_$]+\.preload\(\)\)\);/
+  );
+  const matchedA = preloadMatch ? preloadMatch[1] : "A";
+  const matchedRI = preloadMatch ? preloadMatch[2] : "NI";
+
+  const storeMatch = fnBody.match(
+    /let [a-zA-Z0-9_$]+=e\.layout,[a-zA-Z0-9_$]+=e\.sessions,([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(e\),([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\(\)=>!!/
+  );
+  const matchedDoe = storeMatch ? storeMatch[2] : "Doe";
+  const matchedE = storeMatch ? storeMatch[4] : "E";
+
+  const cmdMatch = fnBody.match(/e\.add\(([a-zA-Z0-9_$]+),\(\)=>\(?\{id:[`'"]ask[`'"]/);
+  const matchedCmdExt = cmdMatch ? cmdMatch[1] : "xI";
+
+  const sideMatch = fnBody.match(/e\.add\(([a-zA-Z0-9_$]+),\{id:[`'"]main[`'"],region:[`'"]side[`'"]/);
+  const matchedSideExt = sideMatch ? sideMatch[1] : "CI";
+
+  const labelMatch = fnBody.match(
+    /var [a-zA-Z0-9_$]+=([a-zA-Z0-9_$]+)\(\),[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+\.firstChild;return ([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),\{name:[`'"]bubble-5[`'"]/
+  );
+  const matchedOoe = labelMatch ? labelMatch[1] : "Ooe";
+  const matchedH = labelMatch ? labelMatch[2] : "H";
+  const matchedF = labelMatch ? labelMatch[3] : "F";
+  const matchedIcon = labelMatch ? labelMatch[4] : "hP";
+
+  const suspenseMatch = fnBody.match(
+    /render:[a-zA-Z0-9_$]+=>[a-zA-Z0-9_$]+\(([a-zA-Z0-9_$]+),\{get children\(\)\{return/
+  );
+  const matchedZeWrapper = suspenseMatch ? suspenseMatch[1] : "Ze";
+
+  const headerExtMatch = out.match(/e\.add\(([a-zA-Z0-9_$]+),\{at:[`'"]session\.header[`'"],order:/);
+  const headerExt = headerExtMatch ? headerExtMatch[1] : "OI";
+
+  let matchedTrack = "r7";
+  const s7Match = out.match(
+    /\{at:[`'"]session\.header[`'"],order:10,render:[a-zA-Z0-9_$]+=>[a-zA-Z0-9_$]+\(([a-zA-Z0-9_$]+),/
+  );
+  if (s7Match) {
+    const s7Name = s7Match[1];
+    const trackMatch = out.match(
+      new RegExp(`function\\s+${s7Name}\\([a-zA-Z0-9_$]+\\)\\{[\\s\\S]*?([a-zA-Z0-9_$]+)\\(\\(\\)=>[a-zA-Z0-9_$]+\\.session\\)`)
+    );
+    if (trackMatch) matchedTrack = trackMatch[1];
+  }
+
+  // Parse original panel to get export names for Tooltip, Button, Show
+  const panelImportMatch = origPanelSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
+  const panelImports = {};
+  if (panelImportMatch) {
+    for (const part of panelImportMatch[1].split(",")) {
+      const [orig, local] = part.trim().split(/\s+as\s+/);
+      panelImports[local || orig] = orig;
+    }
+  }
+
+  const exportIdx = out.lastIndexOf("export{");
+  const exportsStr = exportIdx !== -1 ? out.slice(exportIdx) : "";
+  function findInternalName(exportName, fallback) {
+    if (!exportName) return fallback;
+    const m = exportsStr.match(new RegExp(`([a-zA-Z0-9_$]+)\\s+as\\s+${exportName}\\b`));
+    return m ? m[1] : fallback;
+  }
+
+  const matchedTooltip = findInternalName(panelImports["i"], "AH");
+  const matchedButton = findInternalName(panelImports["e"], "zH");
+  const matchedShow = findInternalName(panelImports["m"], "R");
 
   const replacementIse = [
     `${matchedIseName}=e=>{`,
     "window.__oc_app_ext=e;",
-    `let t=${matchedRe}(()=>${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url));`,
-    "A(NI(()=>void t.preload()));",
+    `let t=${matchedZe}(()=>${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url));`,
+    `${matchedA}(${matchedRI}(()=>void t.preload()));`,
     `${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url).then(m=>m.initCompanion?.(e));`,
-    "let n=e.layout,r=e.sessions,i=Pse(e),a=E(()=>!!r.current()),",
-    "mainTab={id:`main`,get title(){return`/btw`},draggable:!1,closable:`compact`,fallback:!0,label:()=>((()=>{var r=Fse(),a=r.firstChild;return H(r,F(jP,{name:`bubble-5`,size:`small`}),a),H(a,()=>`/btw`),r})())};",
-    "e.add(CI,{at:`session.header`,order:15,render:p=>{r7(()=>p.session);return F(R,{get when(){return p.session.id},get children(){return F(hH,{value:`/btw 随时问答 (Alt+B)`,placement:`bottom`,get children(){return F(wH,{type:`button`,variant:`ghost-muted`,class:`group shrink-0`,style:{padding:`0 6px`,color:`var(--v2-text-text-faint)`},onClick:()=>{p.session.id&&n.toggle(`btw:main`,p.session)},get\"aria-expanded\"(){return n.state(`btw:main`,p.session)===`visible`},\"aria-label\":`/btw 随时问答`,get children(){var el=Fse(),sp=el.firstChild;return H(el,F(jP,{name:`bubble-5`,size:`small`}),sp),H(sp,()=>`/btw`),el}})}})}})}});",
-    "e.add(gI,()=>({id:`ask`,title:`/btw 随时问答`,description:`打开右侧多轮问答面板，支持划词引用、自由切换模型与上下文控制`,group:e.t(`command.category.session`),section:`session`,bind:`alt+b`,slash:{name:`btw`,arguments:!0},enabled:!n.narrow()&&a(),run:arg=>{let cur=r.current();if(!cur?.id)return;if(window.__oc_btw_slash){window.__oc_btw_slash(arg,cur);return}n.toggle(`btw:main`,cur)}}));",
-    "e.add(vI,{id:`main`,region:`side`,normalize:()=>`main`,legacy:{btw:`main`},list:t=>t.open.length>0?[mainTab]:[],render:p=>F(Je,{get children(){return F(t,{btw:i,get session(){return p.session},get id(){return`main`}})}})})",
+    `let n=e.layout,r=e.sessions,i=${matchedDoe}(e),a=${matchedE}(()=>!!r.current()),`,
+    `mainTab={id:\`main\`,get title(){return\`/btw\`},draggable:!1,closable:\`compact\`,fallback:!0,label:()=>((()=>{var r=${matchedOoe}(),a=r.firstChild;return ${matchedH}(r,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),a),${matchedH}(a,()=>\`/btw\`),r})())};`,
+    `e.add(${headerExt},{at:\`session.header\`,order:15,render:p=>{${matchedTrack}(()=>p.session);return ${matchedF}(${matchedShow},{get when(){return p.session.id},get children(){return ${matchedF}(${matchedTooltip},{value:\`/btw 随时问答 (Alt+B)\`,placement:\`bottom\`,get children(){return ${matchedF}(${matchedButton},{type:\`button\`,variant:\`ghost-muted\`,class:\`group shrink-0\`,style:{padding:\`0 6px\`,color:\`var(--v2-text-text-faint)\`},onClick:()=>{p.session.id&&n.toggle(\`btw:main\`,p.session)},get\"aria-expanded\"(){return n.state(\`btw:main\`,p.session)===\`visible\`},\"aria-label\":\`/btw 随时问答\`,get children(){var el=${matchedOoe}(),sp=el.firstChild;return ${matchedH}(el,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),sp),${matchedH}(sp,()=>\`/btw\`),el}})}})}})}});`,
+    `e.add(${matchedCmdExt},()=>({id:\`ask\`,title:\`/btw 随时问答\`,description:\`打开右侧多轮问答面板，支持划词引用、自由切换模型与上下文控制\`,group:e.t(\`command.category.session\`),section:\`session\`,bind:\`alt+b\`,slash:{name:\`btw\`,arguments:!0},enabled:!n.narrow()&&a(),run:arg=>{let cur=r.current();if(!cur?.id)return;if(window.__oc_btw_slash){window.__oc_btw_slash(arg,cur);return}n.toggle(\`btw:main\`,cur)}}));`,
+    `e.add(${matchedSideExt},{id:\`main\`,region:\`side\`,normalize:()=>\`main\`,legacy:{btw:\`main\`},list:t=>t.open.length>0?[mainTab]:[],render:p=>${matchedF}(${matchedZeWrapper},{get children(){return ${matchedF}(t,{btw:i,get session(){return p.session},get id(){return\`main\`}})}})})`,
     "}",
   ].join("");
 
-  out = out.slice(0, iStart) + replacementIse + out.slice(iEnd + endMarkerLen);
+  out = out.slice(0, iStart) + replacementIse + out.slice(iEnd);
 
   // 3. Isolate ephemeral `ses_btw_*` SSE streaming sessions from main store & notifications
   if (out.includes("function de(e){switch(e.type){")) {
@@ -277,124 +404,156 @@ function patchSessionRouteBundle(src) {
   let out = src;
 
   // 1. Allow right side panel to be resized down to 340px instead of 480px minimum
-  if (out.includes("var t_=480,n_=800")) {
-    out = out.replace("var t_=480,n_=800", "var t_=340,n_=800");
-  } else {
-    out = out.replace(/var\s+([a-zA-Z0-9_$]+=)480(,[a-zA-Z0-9_$]+=800)/, "var $1340$2");
-  }
+  out = out.replace(/var\s+([a-zA-Z0-9_$]+=)480(,[a-zA-Z0-9_$]+=800)/, "var $1340$2");
 
-  // 2. Expose timeline controller `p=mv(t)` on `window.__oc_timeline_ctrl` for virtual-scroll navigation
-  if (out.includes("p=mv(t),m=Sv(")) {
-    out = out.replace("p=mv(t),m=Sv(", "p=(window.__oc_current_session=t,window.__oc_timeline_ctrl=mv(t)),m=Sv(");
+  // 2. Expose timeline controller on window.__oc_timeline_ctrl & window.__oc_current_session
+  const mvMatch212 = out.match(
+    /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\),([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\{sessionID:\3\.identity\.sessionID,scrollRef:\1\.scroller/
+  );
+  if (mvMatch212) {
+    const origCtrlVar = mvMatch212[1];
+    const fnMv = mvMatch212[2];
+    const sessVar = mvMatch212[3];
+    out = out.replace(
+      `${origCtrlVar}=${fnMv}(${sessVar})`,
+      `${origCtrlVar}=(window.__oc_current_session=${sessVar},window.__oc_timeline_ctrl=${fnMv}(${sessVar}))`
+    );
   } else {
-    const mvMatch = out.match(/([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\),([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\(\3\)/);
-    if (mvMatch) {
-      const origCtrlVar = mvMatch[1];
-      const fnMv = mvMatch[2];
-      const sessVar = mvMatch[3];
+    const mvMatch2032 = out.match(
+      /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\),([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\(\3\)/
+    );
+    if (mvMatch2032 && !out.slice(Math.max(0, mvMatch2032.index - 50), mvMatch2032.index).includes("Math.")) {
+      const origCtrlVar = mvMatch2032[1];
+      const fnMv = mvMatch2032[2];
+      const sessVar = mvMatch2032[3];
       out = out.replace(
-        mvMatch[0],
-        `${origCtrlVar}=(window.__oc_current_session=${sessVar},window.__oc_timeline_ctrl=${fnMv}(${sessVar})),${mvMatch[4]}${mvMatch[5]}(${sessVar})`
+        mvMatch2032[0],
+        `${origCtrlVar}=(window.__oc_current_session=${sessVar},window.__oc_timeline_ctrl=${fnMv}(${sessVar})),${mvMatch2032[4]}${mvMatch2032[5]}(${sessVar})`
       );
     } else {
-      throw new Error("Could not locate p=mv(t),m=Sv( in route bundle.");
+      throw new Error("Could not locate timeline controller in route bundle.");
     }
   }
 
   // 3. Expose virtualizer instance M and scrollAdjustment flusher be() on window.__oc_virtual_scroll
-  const revealMarker = "e.setRevealMessage?.((t,r)=>{";
-  if (out.includes(revealMarker)) {
+  const revealMatch = out.match(
+    /e\.setRevealMessage\?\.\(\(([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+)\)=>\{(?:if\(![a-zA-Z0-9_$]+\(\)\)return;)?let [a-zA-Z0-9_$]+=\2\?([a-zA-Z0-9_$]+)\(\)\.findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[`'"]AssistantPart[`'"]\)[^}]+?([a-zA-Z0-9_$]+)\.scrollToIndex/
+  );
+  if (revealMatch) {
+    const itemsFn = revealMatch[3];
+    const checkFn = revealMatch[4];
+    const virtVar = revealMatch[5];
     out = out.replace(
-      revealMarker,
-      "window.__oc_virtual_scroll={M,be,getRowIndex:(t,r)=>{let i=r?y().findIndex(e=>W(e,`AssistantPart`)&&e.group.type===`part`&&e.group.ref.partID===r):-1;return i>=0?i:e.projection.messageRowIndex().get(t)}},e.setRevealMessage?.((t,r)=>{"
+      "e.setRevealMessage?.((t,r)=>{",
+      `window.__oc_virtual_scroll={M:${virtVar},be,getRowIndex:(t,r)=>{let i=r?${itemsFn}().findIndex(e=>${checkFn}(e,\`AssistantPart\`)&&e.group.type===\`part\`&&e.group.ref.partID===r):-1;return i>=0?i:e.projection.messageRowIndex().get(t)}},e.setRevealMessage?.((t,r)=>{`
     );
   } else {
     throw new Error("Could not locate e.setRevealMessage in route bundle.");
   }
 
-  // 4. Inject "Branch to new chat" (分支到新聊天) button next to copy button in assistant response footer
-  const declTarget = "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))};";
-  const declInject = [
-    "[l,u]=en(!1),d=async()=>{await af(e.text)&&(u(!0),setTimeout(()=>u(!1),2e3))};",
-    "let _oc_sdk,_oc_srv,_oc_st,_oc_nav,_oc_prm;",
-    "try{_oc_sdk=nt()}catch(e){}",
-    "try{_oc_srv=pt()}catch(e){}",
-    "try{_oc_st=Jn()}catch(e){}",
-    "try{_oc_nav=xn()}catch(e){}",
-    "try{_oc_prm=Nn()}catch(e){}",
-    "let [__oc_fk_l,__oc_set_fk_l]=en(!1),",
-    "__oc_fork=async(evt)=>{",
-    "if(evt){evt.preventDefault?.();evt.stopPropagation?.()}",
-    "if(__oc_fk_l())return;",
-    "let sId=_oc_prm?.id||window.__oc_current_session?.identity?.sessionID?.()||window.__oc_current_session?.identity?.params?.id||window.__oc_timeline_ctrl?.sessionID?.()||window.__oc_app_ext?.sessions?.current?.()?.id;",
-    "if(!sId){",
-    "Ot({title:n.t('common.requestFailed')||'请求失败',description:'未找到当前会话ID'});",
-    "return;",
-    "}",
-    "__oc_set_fk_l(!0);",
-    "try{",
-    "let sdk=_oc_sdk||window.__oc_app_ext?.sdk;",
-    "let srv=_oc_srv;",
-    "let st=_oc_st;",
-    "let nav=_oc_nav;",
-    "let srvKey=srv?.key||window.__oc_current_session?.identity?.params?.serverKey||'local';",
-    "if(!sdk?.api?.session?.fork)throw new Error('Fork API 未就绪');",
-    "let msgs=st?.session?.message?.list?.(sId)||[];",
-    "let cIdx=msgs.findIndex(m=>m.id===e.message.id);",
-    "let bId=void 0;",
-    "if(cIdx!==-1){let nu=msgs.slice(cIdx+1).find(m=>m.type==='user');nu&&(bId=nu.id)}",
-    "let fk=await sdk.api.session.fork({sessionID:sId,before:bId});",
-    "if(fk?.id){",
-    "let curS=st?.session?.get?.(sId)||window.__oc_current_session?.data?.info?.();",
-    "let isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';",
-    "let rawT=curS?.title||(isZh?'新会话':'New Session');",
-    "let clnT=rawT.replace(/\\s*\\((?:分支(?:\\s*\\d+)?|branch(?:\\s*\\d+)?|fork(?:\\s*#?\\d+)?)\\)$/i,'').trim();",
-    "let allS=st?.session?.list?.()||[];",
-    "let esc=clnT.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&');",
-    "let bRe=new RegExp('^'+esc+' \\\\('+tag+'(?: (\\\\d+))?\\\\)$'),has1=!1,maxN=1;",
-    "for(let s of allS){if(!s?.title)continue;let m=s.title.match(bRe);m&&(m[1]===void 0?has1=!0:(maxN=Math.max(maxN,parseInt(m[1],10))))}",
-    "let nTitle=!has1?(clnT+' ('+tag+')'):(clnT+' ('+tag+' '+(maxN+1)+')');",
-    "await sdk.api.session.update({sessionID:fk.id,title:nTitle}).catch(()=>{});",
-    "fk.title=nTitle;",
-    "st?.session?.remember?.(fk);",
-    "if(nav){nav(M(srvKey,fk.id))}else{window.location.hash=M(srvKey,fk.id)}",
-    "}",
-    "}catch(err){",
-    "let msg=err instanceof Error?err.message:String(err);",
-    "Ot({title:n.t('common.requestFailed')||'请求失败',description:msg});",
-    "}finally{",
-    "__oc_set_fk_l(!1);",
-    "}",
-    "},",
-    "__oc_fork_lbl=()=>{",
-    "let isZh=n.locale()?.startsWith('zh')??!0;",
-    "return __oc_fk_l()?(isZh?'正在分支...':'Branching...'):(isZh?'分支到新聊天':'Branch to new chat');",
-    "};",
-  ].join("");
+  // 4. Inject "Branch to new chat" button next to copy button in assistant response footer
+  const routeImportMatch = out.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
+  const routeImports = {};
+  if (routeImportMatch) {
+    for (const part of routeImportMatch[1].split(",")) {
+      const [orig, local] = part.trim().split(/\s+as\s+/);
+      routeImports[orig] = local || orig;
+    }
+  }
 
-  const jsxTarget =
-    'var e=ef();return G(e,X(sf,{get icon(){return l()?`check`:`copy`},get label(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)},onMouseDown:e=>e.preventDefault(),onClick:d,get"aria-label"(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)}}),null),G(e,X(R,{get when(){return c()},get children(){var e=$d();return G(e,c),e}}),null),x(()=>U(e,`data-interrupted`,i()?``:void 0)),e';
+  const sigFn = routeImports["bl"] || "en";
+  const toastFn = routeImports["di"] || "Ot";
+  const sessionUrlFn = routeImports["Ir"] || "M";
+  const sdkHook = routeImports["gi"] || "nt";
+  const srvHook = routeImports["yi"] || "pt";
+  const stHook = routeImports["vi"] || "Jn";
+  const navHook = routeImports["Zs"] || "xn";
+  const prmHook = routeImports["Qs"] || "Nn";
 
-  const jsxInject = [
-    'var e=ef();return ',
-    'G(e,X(sf,{get icon(){return l()?`check`:`copy`},get label(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)},onMouseDown:e=>e.preventDefault(),onClick:d,get"aria-label"(){return B(()=>!!l())()?n.t(`ui.message.copied`):n.t(`ui.message.copyResponse`)}}),null),',
-    'G(e,X(sf,{icon:`fork`,get label(){return __oc_fork_lbl()},get disabled(){return __oc_fk_l()},onMouseDown:e=>e.preventDefault(),onClick:__oc_fork,get"aria-label"(){return __oc_fork_lbl()}}),null),',
-    'G(e,X(R,{get when(){return c()},get children(){var e=$d();return G(e,c),e}}),null),',
-    'x(()=>U(e,`data-interrupted`,i()?``:void 0)),',
-    'e',
-  ].join("");
+  const declRegex = /\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=[a-zA-Z0-9_$]+\(!1\),[a-zA-Z0-9_$]+=async\(\)=>\{await [a-zA-Z0-9_$]+\(e\.text\)&&\(.+?setTimeout\(.+?2e3\)\)\};/;
+  const declMatch = out.match(declRegex);
 
-  if (out.includes(declTarget) && out.includes(jsxTarget)) {
-    out = out.replace(declTarget, () => declInject).replace(jsxTarget, () => jsxInject);
-  } else {
+  const jsxRegex = /var\s+([a-zA-Z0-9_$]+)=[a-zA-Z0-9_$]+\(\);return\s+([a-zA-Z0-9_$]+)\(\1,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),\{get icon\(\)\{return [a-zA-Z0-9_$]+\(\)\?`check`:`copy`\}.+?n\.t\([`'"]ui\.message\.copyResponse[`'"]\).*?\}\),null\),/;
+  const jsxMatch = out.match(jsxRegex);
+
+  if (!declMatch || !jsxMatch) {
     throw new Error("Could not locate assistant message copy footer in route bundle.");
   }
+
+  const containerVar = jsxMatch[1];
+  const insertFn = jsxMatch[2];
+  const createCompFn = jsxMatch[3];
+  const iconBtnComp = jsxMatch[4];
+
+  const declInject = [
+    declMatch[0],
+    `let _oc_sdk,_oc_srv,_oc_st,_oc_nav,_oc_prm;`,
+    `try{_oc_sdk=${sdkHook}()}catch(e){}`,
+    `try{_oc_srv=${srvHook}()}catch(e){}`,
+    `try{_oc_st=${stHook}()}catch(e){}`,
+    `try{_oc_nav=${navHook}()}catch(e){}`,
+    `try{_oc_prm=${prmHook}()}catch(e){}`,
+    `let [__oc_fk_l,__oc_set_fk_l]=${sigFn}(!1),`,
+    `__oc_fork=async(evt)=>{`,
+    `if(evt){evt.preventDefault?.();evt.stopPropagation?.()}`,
+    `if(__oc_fk_l())return;`,
+    `let sId=_oc_prm?.id||window.__oc_current_session?.identity?.sessionID?.()||window.__oc_current_session?.identity?.params?.id||window.__oc_timeline_ctrl?.sessionID?.()||window.__oc_app_ext?.sessions?.current?.()?.id;`,
+    `if(!sId){`,
+    `${toastFn}({title:n.t('common.requestFailed')||'请求失败',description:'未找到当前会话ID'});`,
+    `return;`,
+    `}`,
+    `__oc_set_fk_l(!0);`,
+    `try{`,
+    `let sdk=_oc_sdk||window.__oc_app_ext?.sdk;`,
+    `let srv=_oc_srv;`,
+    `let st=_oc_st;`,
+    `let nav=_oc_nav;`,
+    `let srvKey=srv?.key||window.__oc_current_session?.identity?.params?.serverKey||'local';`,
+    `if(!sdk?.api?.session?.fork)throw new Error('Fork API 未就绪');`,
+    `let msgs=st?.session?.message?.list?.(sId)||[];`,
+    `let cIdx=msgs.findIndex(m=>m.id===e.message.id);`,
+    `let bId=void 0;`,
+    `if(cIdx!==-1){let nu=msgs.slice(cIdx+1).find(m=>m.type==='user');nu&&(bId=nu.id)}`,
+    `let fk=await sdk.api.session.fork({sessionID:sId,before:bId});`,
+    `if(fk?.id){`,
+    `let curS=st?.session?.get?.(sId)||window.__oc_current_session?.data?.info?.();`,
+    `let isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';`,
+    `let rawT=curS?.title||(isZh?'新会话':'New Session');`,
+    `let clnT=rawT.replace(/\\s*\\((?:分支(?:\\s*\\d+)?|branch(?:\\s*\\d+)?|fork(?:\\s*#?\\d+)?)\\)$/i,'').trim();`,
+    `let allS=st?.session?.list?.()||[];`,
+    'let esc=clnT.replace(/[.*+?^${}()|[\\]\\\\]/g,\'\\\\$&\');',
+    `let bRe=new RegExp('^'+esc+' \\\\('+tag+'(?: (\\\\d+))?\\\\)$'),has1=!1,maxN=1;`,
+    `for(let s of allS){if(!s?.title)continue;let m=s.title.match(bRe);m&&(m[1]===void 0?has1=!0:(maxN=Math.max(maxN,parseInt(m[1],10))))}`,
+    `let nTitle=!has1?(clnT+' ('+tag+')'):(clnT+' ('+tag+' '+(maxN+1)+')');`,
+    `await sdk.api.session.update({sessionID:fk.id,title:nTitle}).catch(()=>{});`,
+    `fk.title=nTitle;`,
+    `st?.session?.remember?.(fk);`,
+    `if(nav){nav(${sessionUrlFn}(srvKey,fk.id))}else{window.location.hash=${sessionUrlFn}(srvKey,fk.id)}`,
+    `}`,
+    `}catch(err){`,
+    `let msg=err instanceof Error?err.message:String(err);`,
+    `${toastFn}({title:n.t('common.requestFailed')||'请求失败',description:msg});`,
+    `}finally{`,
+    `__oc_set_fk_l(!1);`,
+    `}`,
+    `},`,
+    `__oc_fork_lbl=()=>{`,
+    `let isZh=n.locale()?.startsWith('zh')??!0;`,
+    `return __oc_fk_l()?(isZh?'正在分支...':'Branching...'):(isZh?'分支到新聊天':'Branch to new chat');`,
+    `};`
+  ].join("");
+
+  const branchJsx = `${insertFn}(${containerVar},${createCompFn}(${iconBtnComp},{icon:\`fork\`,get label(){return __oc_fork_lbl()},get disabled(){return __oc_fk_l()},onMouseDown:e=>e.preventDefault(),onClick:__oc_fork,get"aria-label"(){return __oc_fork_lbl()}}),null),`;
+
+  out = out.replace(declMatch[0], () => declInject);
+  out = out.replace(jsxMatch[0], () => `${jsxMatch[0]}${branchJsx}`);
 
   return out;
 }
 
 function main() {
   const args = process.argv.slice(2);
+  const force = args.includes("--force") || args.includes("-f");
   const asarPath = resolveAsarPath();
   const bakPath = `${asarPath}.bak`;
 
@@ -409,8 +568,8 @@ function main() {
     process.exit(1);
   }
 
-  // Ensure OpenCode process is closed before modifying files
-  ensureOpenCodeClosed();
+  // Ensure OpenCode process is closed before modifying files (unless --force)
+  ensureOpenCodeClosed(force);
 
   if (args.includes("--restore")) {
     if (!fs.existsSync(bakPath)) {
@@ -477,9 +636,6 @@ function main() {
   }
 
   console.log(`[patch] 目标 OpenCode 版本: v${targetVersion}`);
-  if (targetVersion !== "2.0.32" && targetVersion !== "unknown") {
-    console.log(`[提示] 本补丁在 v2.0.32 下经过完整验证。如果在新版本下遇到匹配错误，可运行 --restore 恢复。`);
-  }
 
   const assetsMap = header?.files?.out?.files?.renderer?.files?.assets?.files;
   if (!assetsMap) {
@@ -498,41 +654,91 @@ function main() {
   const origMainSrc = readFileFromAsar(payload, assetsMap[mainFileName]).toString("utf8");
   const origRouteSrc = readFileFromAsar(payload, assetsMap[routeFileName]).toString("utf8");
 
-  // Dynamically detect the btw panel chunk name referenced by main bundle
-  const panelRefMatch = origMainSrc.match(/import\([`'"]\.\/(panel-[A-Za-z0-9_-]+\.js)[`'"]\)/);
+  // Dynamically detect the btw panel chunk name referenced specifically by btw extension in main bundle
+  const btwIdx = origMainSrc.indexOf("slash:{name:`btw`");
+  const panelRefMatch =
+    (btwIdx !== -1
+      ? origMainSrc
+          .slice(Math.max(0, btwIdx - 1000), btwIdx)
+          .match(/import\([`'"]\.\/(panel-[A-Za-z0-9_-]+\.js)[`'"]\)/)
+      : null) || origMainSrc.match(/import\([`'"]\.\/(panel-[A-Za-z0-9_-]+\.js)[`'"]\)/);
   const targetPanelFileName = panelRefMatch ? panelRefMatch[1] : "panel-c7bWJg2T.js";
 
   if (!assetsMap[targetPanelFileName]) {
     throw new Error(`Missing expected btw panel asset: ${targetPanelFileName}`);
   }
 
+  const origPanelSrc = readFileFromAsar(payload, assetsMap[targetPanelFileName]).toString("utf8");
+
   console.log(`[patch] 定位关键模块文件:`);
   console.log(`  - 主包入口 (Main):   ${mainFileName}`);
   console.log(`  - 会话路由 (Route):  ${routeFileName}`);
   console.log(`  - 问答面板 (Panel):  ${targetPanelFileName}`);
 
+  // Resolve dynamic symbols for custom panel imports across different OpenCode versions
+  const symbols = resolvePanelSymbols(origPanelSrc, origRouteSrc, origMainSrc);
+  console.log(`[patch] 动态解析 Solid/OpenCode 组件符号:`, {
+    Tooltip: symbols.Tooltip,
+    Button: symbols.Button,
+    Show: symbols.Show,
+    Icon: symbols.Icon,
+    createSignal: symbols.createSignal,
+    createMemo: symbols.createMemo,
+    createEffect: symbols.createEffect,
+    onCleanup: symbols.onCleanup,
+  });
+
   let customPanelSrc = fs.readFileSync(customPanelPath, "utf8");
 
-  // Dynamically rewrite imports in custom panel to match the user's specific bundle chunk hashes
-  customPanelSrc = customPanelSrc.replace(/\.\/main-[A-Za-z0-9_-]+\.js/g, `./${mainFileName}`);
+  // Rewrite main bundle imports in custom panel using the resolved symbol aliases
+  const oldImportsRegex = /import\s*\{[\s\S]*?\}\s*from\s*["']\.\/main-[^"']+["'];?/;
+  const newImports = `import {
+  ${symbols.onChange} as onChange,
+  ${symbols.Tooltip} as Tooltip,
+  ${symbols.useExtension} as useExtension,
+  ${symbols.IconButton} as IconButton,
+  ${symbols.createMemo} as createMemo,
+  ${symbols.ScrollView} as ScrollView,
+  ${symbols.Show} as Show,
+  ${symbols.Icon} as Icon,
+  ${symbols.Match} as Match,
+  ${symbols.memoBool} as memoBool,
+  ${symbols.Button} as Button,
+  ${symbols.createSignal} as createSignal,
+  ${symbols.showToast} as showToast,
+  ${symbols.insert} as insert,
+  ${symbols.template} as template,
+  ${symbols.Switch} as Switch,
+  ${symbols.createComponent} as createComponent,
+  ${symbols.For} as For,
+  ${symbols.createEffect} as createEffect,
+  ${symbols.onCleanup} as onCleanup,
+} from "./${mainFileName}";`;
 
-  const markdownFileName = Object.keys(assetsMap).find((k) => {
-    if (!/^markdown-[A-Za-z0-9_-]+\.js$/.test(k)) return false;
-    const node = assetsMap[k];
-    const src = readFileFromAsar(payload, node);
-    // The markdown rendering component exports `t` (e.g. `ki as t` or `as t`)
-    return src.includes("as t") || src.includes(",t}") || src.includes("t as");
-  }) || Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k));
-  if (markdownFileName) {
-    customPanelSrc = customPanelSrc.replace(/\.\/markdown-[A-Za-z0-9_-]+\.js/g, `./${markdownFileName}`);
-  }
+  customPanelSrc = customPanelSrc.replace(oldImportsRegex, newImports);
 
-  const shimmerFileName = Object.keys(assetsMap).find((k) => /^text-shimmer-[A-Za-z0-9_-]+\.js$/.test(k));
-  if (shimmerFileName) {
-    customPanelSrc = customPanelSrc.replace(/\.\/text-shimmer-[A-Za-z0-9_-]+\.js/g, `./${shimmerFileName}`);
-  }
+  // Extract the exact markdown and text-shimmer chunks used by the target panel
+  const mdMatch = origPanelSrc.match(/from\s*["']\.\/(markdown-[^"']+)["']/);
+  const shMatch = origPanelSrc.match(/from\s*["']\.\/(text-shimmer-[^"']+)["']/);
+  const markdownFileName =
+    mdMatch?.[1] ||
+    Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k)) ||
+    "markdown.js";
+  const shimmerFileName =
+    shMatch?.[1] ||
+    Object.keys(assetsMap).find((k) => /^text-shimmer-[A-Za-z0-9_-]+\.js$/.test(k)) ||
+    "text-shimmer.js";
 
-  const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc, targetPanelFileName), "utf8");
+  customPanelSrc = customPanelSrc.replace(
+    /import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["']/,
+    `import { t as Markdown } from "./${markdownFileName}"`
+  );
+  customPanelSrc = customPanelSrc.replace(
+    /import\s*\{[^}]*\}\s*from\s*["']\.\/text-shimmer-[^"']+["']/,
+    `import { t as TextShimmer } from "./${shimmerFileName}"`
+  );
+
+  const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 

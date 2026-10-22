@@ -17,7 +17,7 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
-node "%~dp0apply-mod.mjs"
+node "%~dp0apply-mod.mjs" %*
 if %errorlevel% neq 0 (
   echo.
   echo [失败] 补丁注入过程中遇到错误，请查看上方提示排查。
