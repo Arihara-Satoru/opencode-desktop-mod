@@ -202,8 +202,12 @@ function injectStyle() {
 }
 
 function mountUi(host, api) {
+  host.__oc_cx_dispose?.();
   injectStyle();
   host.classList.add("oc-cx-host");
+  let disposed = false;
+  const events = new AbortController();
+  const listen = { signal: events.signal };
 
   const state = {
     snap: null,
@@ -215,6 +219,7 @@ function mountUi(host, api) {
     popup: null,
     card: null,
     cardAnchor: null,
+    hoveredProject: null,
     cardTimer: 0,
     cardHide: 0,
   };
@@ -262,7 +267,7 @@ function mountUi(host, api) {
     clearTimeout(state.cardTimer);
     clearTimeout(state.cardHide);
     if (state.card) {
-      if (!force && state.cardAnchor && host.contains(state.cardAnchor) && state.cardAnchor.matches(":hover")) {
+      if (!force && state.cardAnchor && host.contains(state.cardAnchor) && state.cardAnchor === state.hoveredProject) {
         return;
       }
       state.card.remove();
@@ -284,6 +289,7 @@ function mountUi(host, api) {
   };
 
   const openMenu = (anchor, items, row) => {
+    if (disposed || !anchor.isConnected) return;
     closePopup();
     hideCard(true);
     const build = (list) => {
@@ -323,6 +329,7 @@ function mountUi(host, api) {
 
   const onDocPointer = (e) => {
     if (state.popup && !state.popup.contains(e.target)) closePopup();
+    if (!state.card?.contains(e.target)) hideCard(true);
   };
   const onKey = (e) => {
     if (e.key === "Escape") {
@@ -330,15 +337,17 @@ function mountUi(host, api) {
       hideCard(true);
     }
   };
-  document.addEventListener("pointerdown", onDocPointer, true);
-  document.addEventListener("keydown", onKey, true);
-  window.addEventListener("blur", closePopup);
-  host.addEventListener("scroll", () => {
+  const closeOverlays = () => {
     closePopup();
     hideCard(true);
-  });
+  };
+  document.addEventListener("pointerdown", onDocPointer, { ...listen, capture: true });
+  document.addEventListener("keydown", onKey, { ...listen, capture: true });
+  window.addEventListener("blur", closeOverlays, listen);
+  host.addEventListener("scroll", closeOverlays, listen);
 
   const showCard = (g, row) => {
+    if (disposed || !host.isConnected || !host.contains(row) || state.hoveredProject !== row) return;
     hideCard(true);
     state.cardAnchor = row;
     const pinned = state.pins.projects.includes(g.key);
@@ -478,34 +487,17 @@ function mountUi(host, api) {
     openMenu(anchor, items, anchor);
   };
 
-  const getStructureHash = (snap, pins, ui) => {
-    const parts = [];
-    for (const sv of snap.servers || []) {
-      parts.push(sv.key);
-      for (const p of sv.projects || []) {
-        parts.push(p.worktree, p.name || "");
-      }
-      for (const s of sv.sessions || []) {
-        parts.push(s.id, s.title);
-      }
-    }
-    for (const d of snap.drafts || []) {
-      parts.push(d.key);
-    }
-    parts.push(
-      "PP:" + pins.projects.join(","),
-      "PS:" + pins.sessions.join(","),
-      "PC:" + (ui.projectsCollapsed ? "1" : "0"),
-      "HP:" + (ui.hiddenProjects || []).join(","),
-    );
-    for (const [k, v] of Object.entries(ui.collapsed || {})) {
-      if (v) parts.push("C:" + k);
-    }
-    for (const [k, v] of Object.entries(ui.expanded || {})) {
-      if (v) parts.push("E:" + k);
-    }
-    return parts.join("\u0001");
-  };
+  // Compare the grouped, sorted model, not the stores' incidental iteration order.
+  const getStructureHash = (model, multi) => JSON.stringify({
+    multi,
+    projects: model.projs.map((g) => [
+      g.key, g.name, g.srvName, g.worktree,
+      g.sessions.map((s) => [s.key, s.title, s.worktree]),
+      g.drafts.map((d) => [d.key, d.server, d.directory]),
+    ]),
+    pins: state.pins,
+    ui: state.ui,
+  });
 
   const buildModel = (snap) => {
     const hiddenSet = new Set(state.ui.hiddenProjects || []);
@@ -519,6 +511,7 @@ function mountUi(host, api) {
         if (hiddenSet.has(key)) continue;
         if (byKey.has(key)) continue;
         const g = {
+          id: p.id,
           key,
           srv: sv.key,
           srvName: sv.name,
@@ -571,7 +564,8 @@ function mountUi(host, api) {
       }
     }
     const compareSessions = (a, b) => {
-      const diff = (b.updated || 0) - (a.updated || 0);
+      // ponytail: Creation order needs no activity cache; viewing/updating never moves a row.
+      const diff = (b.created || 0) - (a.created || 0);
       if (diff !== 0) return diff;
       return (a.id || "").localeCompare(b.id || "");
     };
@@ -586,7 +580,7 @@ function mountUi(host, api) {
       const ra = rank(a);
       const rb = rank(b);
       if (ra !== rb) return ra - rb;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }) || a.key.localeCompare(b.key);
     });
     return { projs: ordered, pinnedSessions, pinnedKeys: new Set(pinnedSessions.map((s) => s.key)) };
   };
@@ -853,12 +847,14 @@ function mountUi(host, api) {
         projectMenu(g, row, row);
       },
       onmouseenter: () => {
+        state.hoveredProject = row;
         clearTimeout(state.cardHide);
         if (state.popup) return;
         clearTimeout(state.cardTimer);
         state.cardTimer = setTimeout(() => showCard(g, row), 380);
       },
       onmouseleave: () => {
+        if (state.hoveredProject === row) state.hoveredProject = null;
         clearTimeout(state.cardTimer);
         state.cardHide = setTimeout(() => hideCard(true), 160);
       },
@@ -924,10 +920,11 @@ function mountUi(host, api) {
     return frag;
   };
 
-  function render() {
+  function render(model) {
     if (!state.snap) return;
+    closeOverlays();
     const scroll = host.scrollTop;
-    const model = buildModel(state.snap);
+    model ||= buildModel(state.snap);
     const multi = state.snap.multi;
     const nodes = [];
     if (model.pinnedSessions.length) {
@@ -977,12 +974,14 @@ function mountUi(host, api) {
       if (!model.projs.length) nodes.push(h("div", { class: "oc-cx-empty" }, L.noProjects));
       for (const g of model.projs) nodes.push(...projectBlock(g, model, multi));
     }
+    // ponytail: Rebuild only on model/UI changes; use keyed rows if structural updates become frequent.
     host.replaceChildren(...nodes);
     host.scrollTop = scroll;
   }
 
   let polling = false;
   async function poll(force) {
+    if (disposed) return;
     if (polling && !force) return;
     polling = true;
     try {
@@ -993,21 +992,16 @@ function mountUi(host, api) {
         return;
       }
       const curKey = snap.currentKey || (snap.current ? sessKey(snap.current.server, snap.current.sessionId) : "");
-      const structureHash = getStructureHash(snap, state.pins, state.ui);
-
-      if (structureHash === state.structureHash && !force) {
-        if (curKey !== state.activeKey) {
-          markActive(curKey);
-        }
-        updateStatuses(snap);
-        return;
-      }
-
-      state.structureHash = structureHash;
       state.snap = snap;
-      state.activeKey = curKey;
+      if (curKey !== state.activeKey) markActive(curKey);
+      updateStatuses(snap);
       if (state.renaming) return;
-      render();
+
+      const model = buildModel(snap);
+      const structureHash = getStructureHash(model, snap.multi);
+      if (structureHash === state.structureHash && !force) return;
+      render(model);
+      state.structureHash = structureHash;
     } finally {
       polling = false;
     }
@@ -1017,7 +1011,7 @@ function mountUi(host, api) {
     try {
       await api.refresh();
     } catch {}
-    poll(true);
+    poll();
   };
 
   window.addEventListener("storage", (e) => {
@@ -1026,7 +1020,7 @@ function mountUi(host, api) {
     state.pins.projects = Array.isArray(p.projects) ? p.projects : [];
     state.pins.sessions = Array.isArray(p.sessions) ? p.sessions : [];
     poll(true);
-  });
+  }, listen);
 
   let lastRefresh = 0;
   const maybeRefresh = () => {
@@ -1034,22 +1028,19 @@ function mountUi(host, api) {
     lastRefresh = Date.now();
     refresh();
   };
-  window.addEventListener("focus", maybeRefresh);
-  document.addEventListener("visibilitychange", () => !document.hidden && maybeRefresh());
+  window.addEventListener("focus", maybeRefresh, listen);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) closeOverlays();
+    else maybeRefresh();
+  }, listen);
 
-  let seen = false;
-  let missing = 0;
+  let seen = host.isConnected;
   let tick = 0;
   const timer = setInterval(() => {
     if (host.isConnected) {
       seen = true;
-      missing = 0;
-    } else if (seen && ++missing > 20) {
-      clearInterval(timer);
-      closePopup();
-      hideCard(true);
-      document.removeEventListener("pointerdown", onDocPointer, true);
-      document.removeEventListener("keydown", onKey, true);
+    } else if (seen) {
+      dispose();
       return;
     }
     if (document.hidden) return;
@@ -1057,9 +1048,19 @@ function mountUi(host, api) {
     if (++tick % 100 === 0) maybeRefresh();
   }, 600);
 
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    clearInterval(timer);
+    closeOverlays();
+    events.abort();
+    if (host.__oc_cx_dispose === dispose) delete host.__oc_cx_dispose;
+  };
+  host.__oc_cx_dispose = dispose;
   lastRefresh = Date.now();
   poll(true);
   refresh();
+  return dispose;
 }
 
 /**
@@ -1118,8 +1119,8 @@ export function mount(host, deps) {
       id: raw.id,
       title: raw.title || "",
       worktree: raw.location?.directory || "",
-      projectID: raw.projectID || "",
-      updated: raw.time?.updated ?? raw.time?.created ?? 0,
+      projectID: raw.projectID || raw.project?.id || "",
+      created: raw.time?.created ?? 0,
       loading,
       unread,
     };
@@ -1149,11 +1150,12 @@ export function mount(host, deps) {
           const base = merged.get(s.id);
           if (base) {
             merged.set(s.id, {
+              ...base,
               ...s,
               title: s.title || base.title,
-              location: s.location || base.location,
+              location: { ...base.location, ...s.location },
               projectID: s.projectID || base.projectID,
-              time: base.time || s.time,
+              time: { ...base.time, ...s.time, created: base.time?.created ?? s.time?.created },
             });
           } else {
             merged.set(s.id, s);
@@ -1304,5 +1306,5 @@ export function mount(host, deps) {
   } catch {
     setLocale();
   }
-  mountUi(host, api);
+  return mountUi(host, api);
 }

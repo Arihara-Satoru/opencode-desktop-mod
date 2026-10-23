@@ -426,7 +426,11 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
           "origWrap.style.display='none';",
           `${insFn}(origWrap,orig);`,
           "var deps={servers:s,tabsStore:d,tabs:_,current:()=>D(),tabKey:jR,serverKey:Q.key,settings:(()=>{try{return zU()}catch(e){return null}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};",
-          "if(window.__oc_cx_sidebar?.mount){window.__oc_cx_sidebar.mount(host,deps)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;m.mount(host,deps)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
+          // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
+          "var cxDisposed=!1,cxDispose;",
+          "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
+          `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
+          "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
           `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
           "})()",
         ].join("");
@@ -437,6 +441,8 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   }
 
   if (vTabsInjected) {
+    // Capture at module scope: the vertical-tab component shadows A with its UI store.
+    out = `const __oc_cx_onCleanup=${matchedA};\n${out}`;
     console.log("[patch] 成功注入 Codex 侧边栏与置顶模块挂钩。");
   } else {
     console.warn("[patch] 警告：未能匹配垂直标签栏挂钩，跳过 Codex 侧边栏注入。");
