@@ -32,6 +32,13 @@ const STRINGS = {
     cancel: "取消",
     close: "关闭",
     moreOptions: "更多选项",
+    closeProject: "从侧边栏移除",
+    confirmCloseProject: "确认从侧边栏移除",
+    deleteProjectChats: "删除此项目全部会话…",
+    confirmDeleteProjectChats: (n) => `确认删除该项目全部 ${n} 条会话`,
+    restoreProjects: "恢复已移除的项目",
+    hiddenTag: "已隐藏",
+    restoreAll: "全部恢复",
   },
   en: {
     projects: "Projects",
@@ -56,6 +63,13 @@ const STRINGS = {
     cancel: "Cancel",
     close: "Close",
     moreOptions: "More options",
+    closeProject: "Remove from sidebar",
+    confirmCloseProject: "Confirm remove from sidebar",
+    deleteProjectChats: "Delete all chats in project…",
+    confirmDeleteProjectChats: (n) => `Confirm delete all ${n} chats`,
+    restoreProjects: "Restore removed projects",
+    hiddenTag: "hidden",
+    restoreAll: "Restore all",
   },
 };
 let L = STRINGS.en;
@@ -176,6 +190,9 @@ function injectStyle() {
 .oc-cx-card-path{word-break:break-all;line-height:17px;padding:6px 0}
 .oc-cx-card .oc-cx-btn{margin-left:auto}
 .oc-cx-pop .oc-cx-card-edit{padding:0 4px;color:var(--v2-text-text-base);min-height:32px}
+.oc-cx-pop .oc-cx-card-edit.is-danger{color:#e5484d}
+.oc-cx-badge{margin-left:auto;display:inline-flex;align-items:center;font-size:11px;line-height:16px;padding:1px 6px;border-radius:10px;background:var(--v2-background-bg-layer-02,rgba(128,128,128,.18));color:var(--v2-text-text-muted);cursor:pointer}
+.oc-cx-badge:hover{background:var(--v2-background-bg-layer-03,rgba(128,128,128,.28));color:var(--v2-text-text-base)}
 @media (prefers-reduced-motion:reduce){.oc-cx-spin{animation:none}.oc-cx-chev{transition:none}}
 `;
   const el = document.createElement("style");
@@ -193,7 +210,7 @@ function mountUi(host, api) {
     structureHash: "",
     activeKey: "",
     pins: Object.assign({ projects: [], sessions: [] }, loadJson(LS_PINS, {})),
-    ui: Object.assign({ projectsCollapsed: false, collapsed: {}, expanded: {} }, loadJson(LS_UI, {})),
+    ui: Object.assign({ projectsCollapsed: false, collapsed: {}, expanded: {}, hiddenProjects: [] }, loadJson(LS_UI, {})),
     renaming: null,
     popup: null,
     card: null,
@@ -203,9 +220,27 @@ function mountUi(host, api) {
   };
   state.pins.projects = Array.isArray(state.pins.projects) ? state.pins.projects : [];
   state.pins.sessions = Array.isArray(state.pins.sessions) ? state.pins.sessions : [];
+  state.ui.hiddenProjects = Array.isArray(state.ui.hiddenProjects) ? state.ui.hiddenProjects : [];
 
   const savePins = () => localStorage.setItem(LS_PINS, JSON.stringify(state.pins));
   const saveUi = () => localStorage.setItem(LS_UI, JSON.stringify(state.ui));
+
+  api.closeProject = async (srv, worktree, deleteChats) => {
+    const pKey = projKey(srv, worktree);
+    try {
+      await api.rawCloseProject(srv, worktree, deleteChats);
+    } catch {}
+    if (!Array.isArray(state.ui.hiddenProjects)) state.ui.hiddenProjects = [];
+    if (!state.ui.hiddenProjects.includes(pKey)) {
+      state.ui.hiddenProjects.push(pKey);
+    }
+    state.pins.projects = state.pins.projects.filter((k) => k !== pKey);
+    delete state.ui.collapsed[pKey];
+    delete state.ui.expanded[pKey];
+    savePins();
+    saveUi();
+    await poll(true);
+  };
 
   const togglePin = (list, key) => {
     const i = list.indexOf(key);
@@ -336,23 +371,33 @@ function mountUi(host, api) {
         h("span", { class: "oc-cx-ico", html: icon("folder", 16) }),
         h("span", { class: "oc-cx-card-path" }, g.worktree),
       ),
+      h("hr"),
       api.canEdit
-        ? [
-            h("hr"),
-            h(
-              "button",
-              {
-                class: "oc-cx-card-edit",
-                onclick: () => {
-                  hideCard(true);
-                  api.editProject(g.srv, g.worktree);
-                },
+        ? h(
+            "button",
+            {
+              class: "oc-cx-card-edit",
+              onclick: () => {
+                hideCard(true);
+                api.editProject(g.srv, g.worktree);
               },
-              h("span", { class: "oc-cx-ico", html: icon("gear", 16) }),
-              L.editProject,
-            ),
-          ]
+            },
+            h("span", { class: "oc-cx-ico", html: icon("gear", 16) }),
+            L.editProject,
+          )
         : null,
+      h(
+        "button",
+        {
+          class: "oc-cx-card-edit is-danger",
+          onclick: () => {
+            hideCard(true);
+            projectMenu(g, row, row);
+          },
+        },
+        h("span", { class: "oc-cx-ico", html: icon("x", 16) }),
+        L.closeProject,
+      ),
     );
     card.addEventListener("mouseenter", () => clearTimeout(state.cardHide));
     card.addEventListener("mouseleave", () => {
@@ -399,6 +444,40 @@ function mountUi(host, api) {
     }
   };
 
+  const openProjectsMenu = (anchor) => {
+    const hiddenList = state.ui.hiddenProjects || [];
+    if (!hiddenList.length) return;
+    const items = [
+      { label: L.restoreProjects, disabled: true },
+      { sep: true },
+      ...hiddenList.map((key) => {
+        const parts = key.split("\u0000");
+        const wt = parts[1] || key;
+        const name = baseName(wt);
+        return {
+          label: `${name}`,
+          icon: "folder",
+          onClick: () => {
+            state.ui.hiddenProjects = state.ui.hiddenProjects.filter((k) => k !== key);
+            saveUi();
+            poll(true);
+          },
+        };
+      }),
+      { sep: true },
+      {
+        label: L.restoreAll,
+        icon: "folderOpen",
+        onClick: () => {
+          state.ui.hiddenProjects = [];
+          saveUi();
+          poll(true);
+        },
+      },
+    ];
+    openMenu(anchor, items, anchor);
+  };
+
   const getStructureHash = (snap, pins, ui) => {
     const parts = [];
     for (const sv of snap.servers || []) {
@@ -417,6 +496,7 @@ function mountUi(host, api) {
       "PP:" + pins.projects.join(","),
       "PS:" + pins.sessions.join(","),
       "PC:" + (ui.projectsCollapsed ? "1" : "0"),
+      "HP:" + (ui.hiddenProjects || []).join(","),
     );
     for (const [k, v] of Object.entries(ui.collapsed || {})) {
       if (v) parts.push("C:" + k);
@@ -428,6 +508,7 @@ function mountUi(host, api) {
   };
 
   const buildModel = (snap) => {
+    const hiddenSet = new Set(state.ui.hiddenProjects || []);
     const projs = [];
     const bySrv = new Map();
     for (const sv of snap.servers) {
@@ -435,6 +516,7 @@ function mountUi(host, api) {
       bySrv.set(sv.key, byKey);
       for (const p of sv.projects) {
         const key = projKey(sv.key, p.worktree);
+        if (hiddenSet.has(key)) continue;
         if (byKey.has(key)) continue;
         const g = {
           key,
@@ -450,7 +532,9 @@ function mountUi(host, api) {
         projs.push(g);
       }
       for (const s of sv.sessions) {
-        const g = byKey.get(projKey(sv.key, s.worktree));
+        const k = projKey(sv.key, s.worktree);
+        if (hiddenSet.has(k)) continue;
+        const g = byKey.get(k);
         if (!g) continue;
         g.sessions.push({ ...s, srv: sv.key, key: sessKey(sv.key, s.id), project: g });
       }
@@ -669,6 +753,7 @@ function mountUi(host, api) {
 
   const projectMenu = (g, anchor, row) => {
     const pinned = state.pins.projects.includes(g.key);
+    const hasChats = g.sessions.length > 0;
     openMenu(
       anchor,
       [
@@ -683,6 +768,35 @@ function mountUi(host, api) {
               navigator.clipboard.writeText(g.worktree);
             } catch {}
           },
+        },
+        { sep: true },
+        {
+          label: L.closeProject,
+          icon: "x",
+          danger: true,
+          onClick: () => [
+            {
+              label: L.confirmCloseProject,
+              icon: "x",
+              danger: true,
+              onClick: async () => {
+                await api.closeProject(g.srv, g.worktree, false);
+              },
+            },
+            ...(hasChats
+              ? [
+                  {
+                    label: L.confirmDeleteProjectChats(g.sessions.length),
+                    icon: "x",
+                    danger: true,
+                    onClick: async () => {
+                      await api.closeProject(g.srv, g.worktree, true);
+                    },
+                  },
+                ]
+              : []),
+            { label: L.cancel },
+          ],
         },
       ].filter(Boolean),
       row,
@@ -795,6 +909,7 @@ function mountUi(host, api) {
       nodes.push(h("div", { class: "oc-cx-label is-static" }, L.pinned));
       for (const s of model.pinnedSessions) nodes.push(sessionRow(s, true));
     }
+    const hiddenCount = (state.ui.hiddenProjects || []).length;
     nodes.push(
       h(
         "div",
@@ -802,14 +917,35 @@ function mountUi(host, api) {
           class: "oc-cx-label" + (state.ui.projectsCollapsed ? " is-collapsed" : ""),
           role: "button",
           tabindex: "0",
+          title: hiddenCount ? `${L.projects} (${L.restoreProjects}: ${hiddenCount})` : L.projects,
           onclick: () => {
             state.ui.projectsCollapsed = !state.ui.projectsCollapsed;
             saveUi();
             poll(true);
           },
+          oncontextmenu: (e) => {
+            if (hiddenCount > 0) {
+              e.preventDefault();
+              openProjectsMenu(e.currentTarget);
+            }
+          },
         },
         L.projects,
         h("span", { class: "oc-cx-chev", html: icon("chevron", 14) }),
+        hiddenCount > 0
+          ? h(
+              "span",
+              {
+                class: "oc-cx-badge",
+                title: L.restoreProjects,
+                onclick: (e) => {
+                  e.stopPropagation();
+                  openProjectsMenu(e.currentTarget);
+                },
+              },
+              `${hiddenCount} ${L.hiddenTag}`,
+            )
+          : null,
       ),
     );
     if (!state.ui.projectsCollapsed) {
@@ -1086,6 +1222,35 @@ export function mount(host, deps) {
       if (i !== -1) deps.tabsStore.closeTab(i);
       try {
         ctx.data.session.invalidate?.(id);
+      } catch {}
+    },
+    rawCloseProject: async (srv, worktree, deleteChats) => {
+      const ctx = ctxOf(srv);
+      const dirNorm = norm(worktree);
+      if (deleteChats) {
+        const list = [...rawSessions.values(), ...(ctx?.data.session.list() || [])];
+        const toRemove = list.filter((s) => !s.parentID && norm(s.location?.directory) === dirNorm);
+        for (const s of toRemove) {
+          try {
+            await ctx?.sdk.api.session.remove({ sessionID: s.id });
+            removed.add(sessKey(srv, s.id));
+            rawSessions.delete(sessKey(srv, s.id));
+          } catch {}
+        }
+      }
+      try {
+        ctx?.projects.close(worktree);
+      } catch {}
+      try {
+        for (let i = deps.tabs.length - 1; i >= 0; i--) {
+          const t = deps.tabs[i];
+          if (t.server === srv) {
+            const isMatch =
+              (t.type === "draft" && norm(t.directory) === dirNorm) ||
+              (t.type === "session" && (deleteChats || norm(t.worktree || t.directory) === dirNorm));
+            if (isMatch) deps.tabsStore.closeTab(i);
+          }
+        }
       } catch {}
     },
   };
