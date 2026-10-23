@@ -17,6 +17,11 @@
  *    - Placed next to copy button at assistant turn footer
  *    - Forks conversation up to current assistant turn into a fresh session
  *    - Auto-numbers branch session titles: 原标题 (分支), 原标题 (分支 2)...
+ * 4. Codex-Style Sidebar with Pinning (Codex 风格侧边栏与项目/会话双置顶)
+ *    - Projects accordion grouping with clean session hierarchy (no letter avatars)
+ *    - Hover card for projects: pin, chats count, worktree path, direct edit-project trigger
+ *    - Pinned section at top for pinned sessions; pinned projects hoisted to top
+ *    - Context menu: pin/unpin, rename, delete chat, new chat in project, copy path
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
@@ -33,6 +38,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
+const customSidebarPath = path.join(__dirname, "cx-sidebar.js");
 
 function getCandidateAsarPaths() {
   const custom = process.env.OPENCODE_ASAR_PATH;
@@ -172,7 +178,8 @@ function isAsarPatched(header, payload) {
     return (
       mainBuf.includes(Buffer.from("window.__oc_app_ext")) ||
       mainBuf.includes(Buffer.from("window.__oc_btw_slash")) ||
-      mainBuf.includes(Buffer.from("/btw 随时问答"))
+      mainBuf.includes(Buffer.from("/btw 随时问答")) ||
+      mainBuf.includes(Buffer.from("sidebar-codex.js"))
     );
   } catch {
     return false;
@@ -362,6 +369,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
     `let t=${matchedZe}(()=>${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url));`,
     `${matchedA}(${matchedRI}(()=>void t.preload()));`,
     `${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url).then(m=>m.initCompanion?.(e));`,
+    `import(\`./sidebar-codex.js\`).then(m=>{window.__oc_cx_sidebar=m}).catch(()=>{});`,
     `let n=e.layout,r=e.sessions,i=${matchedDoe}(e),a=${matchedE}(()=>!!r.current()),`,
     `mainTab={id:\`main\`,get title(){return\`/btw\`},draggable:!1,closable:\`compact\`,fallback:!0,label:()=>((()=>{var r=${matchedOoe}(),a=r.firstChild;return ${matchedH}(r,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),a),${matchedH}(a,()=>\`/btw\`),r})())};`,
     `e.add(${headerExt},{at:\`session.header\`,order:15,render:p=>{${matchedTrack}(()=>p.session);return ${matchedF}(${matchedShow},{get when(){return p.session.id},get children(){return ${matchedF}(${matchedTooltip},{value:\`/btw 随时问答 (Alt+B)\`,placement:\`bottom\`,get children(){return ${matchedF}(${matchedButton},{type:\`button\`,variant:\`ghost-muted\`,class:\`group shrink-0\`,style:{padding:\`0 6px\`,color:\`var(--v2-text-text-faint)\`},onClick:()=>{p.session.id&&n.toggle(\`btw:main\`,p.session)},get\"aria-expanded\"(){return n.state(\`btw:main\`,p.session)===\`visible\`},\"aria-label\":\`/btw 随时问答\`,get children(){var el=${matchedOoe}(),sp=el.firstChild;return ${matchedH}(el,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),sp),${matchedH}(sp,()=>\`/btw\`),el}})}})}})}});`,
@@ -395,6 +403,43 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
       /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/,
       '$1$2.sdk.event.listen($3=>{if($3?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
     );
+  }
+
+  // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
+  const vTabsPrefix = "Vae(),(()=>{var ";
+  const pStart = out.indexOf(vTabsPrefix);
+  let vTabsInjected = false;
+  if (pStart !== -1) {
+    const pEndMatch = out.slice(pStart).match(/\.reorder\([a-zA-Z0-9_$]+\)\}\)\),([a-zA-Z0-9_$]+)\}\)\(\)/);
+    if (pEndMatch) {
+      const pEnd = pStart + pEndMatch.index + pEndMatch[0].length;
+      const originalBlock = out.slice(pStart, pEnd);
+      const mInside = originalBlock.match(
+        /Vae\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=Hae\(\);return\s+([a-zA-Z0-9_$]+)\(\1,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),([\s\S]+)\)\),\1\}\)\(\)/
+      );
+      if (mInside) {
+        const [, cVar, insFn, crComp, i5Var, props] = mInside;
+        const replacement = [
+          "Vae(),(()=>{",
+          `var ${cVar}=Hae(),orig=${crComp}(${i5Var},${props}),host=document.createElement('div'),origWrap=document.createElement('div');`,
+          "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
+          "origWrap.style.display='none';",
+          `${insFn}(origWrap,orig);`,
+          "var deps={servers:s,tabsStore:d,tabs:_,current:()=>D(),tabKey:jR,serverKey:Q.key,settings:(()=>{try{return zU()}catch(e){return null}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};",
+          "if(window.__oc_cx_sidebar?.mount){window.__oc_cx_sidebar.mount(host,deps)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;m.mount(host,deps)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
+          `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
+          "})()",
+        ].join("");
+        out = out.slice(0, pStart) + replacement + out.slice(pEnd);
+        vTabsInjected = true;
+      }
+    }
+  }
+
+  if (vTabsInjected) {
+    console.log("[patch] 成功注入 Codex 侧边栏与置顶模块挂钩。");
+  } else {
+    console.warn("[patch] 警告：未能匹配垂直标签栏挂钩，跳过 Codex 侧边栏注入。");
   }
 
   return out;
@@ -742,6 +787,10 @@ function main() {
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
+  const customSidebarSrc = fs.readFileSync(customSidebarPath, "utf8");
+  const patchedSidebarBuf = Buffer.from(customSidebarSrc, "utf8");
+  const sidebarFileName = "sidebar-codex.js";
+
   // Append patched files to the end of payload so all existing offsets remain untouched
   let currentOffset = payload.length;
 
@@ -766,6 +815,13 @@ function main() {
   };
   currentOffset += patchedPanelBuf.length;
 
+  assetsMap[sidebarFileName] = {
+    size: patchedSidebarBuf.length,
+    offset: String(currentOffset),
+    integrity: computeIntegrity(patchedSidebarBuf),
+  };
+  currentOffset += patchedSidebarBuf.length;
+
   const newHeaderJsonBuf = Buffer.from(JSON.stringify(header), "utf8");
   const u3 = newHeaderJsonBuf.length;
   const alignedJsonLen = Math.ceil(u3 / 4) * 4;
@@ -786,6 +842,7 @@ function main() {
     patchedMainBuf,
     patchedRouteBuf,
     patchedPanelBuf,
+    patchedSidebarBuf,
   ]);
 
   fs.writeFileSync(asarPath, finalAsarBuf);
