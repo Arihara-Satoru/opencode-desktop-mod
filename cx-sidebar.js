@@ -10,52 +10,52 @@ const SESSION_PREVIEW = 6;
 
 const STRINGS = {
   zh: {
-      projects: "项目",
-      pinned: "已固定",
-      noChats: "暂无聊天",
-      noProjects: "暂无项目",
-      untitled: "新会话",
-      draft: "新会话",
-      more: (n) => `显示更多 (${n})`,
-      less: "收起",
-      chats: (n) => `${n} 次聊天`,
-      editProject: "编辑项目",
-      newChat: "新建会话",
-      pinProject: "置顶项目",
-      unpinProject: "取消置顶项目",
-      pinChat: "置顶会话",
-      unpinChat: "取消置顶",
-      copyPath: "复制路径",
-      rename: "重命名",
-      remove: "删除会话…",
-      confirmRemove: "确认删除",
-      cancel: "取消",
-      close: "关闭",
-      moreOptions: "更多选项",
+    projects: "项目",
+    pinned: "已固定",
+    noChats: "暂无聊天",
+    noProjects: "暂无项目",
+    untitled: "新会话",
+    draft: "新会话",
+    more: (n) => `显示更多 (${n})`,
+    less: "收起",
+    chats: (n) => `${n} 次聊天`,
+    editProject: "编辑项目",
+    newChat: "新建会话",
+    pinProject: "置顶项目",
+    unpinProject: "取消置顶项目",
+    pinChat: "置顶会话",
+    unpinChat: "取消置顶",
+    copyPath: "复制路径",
+    rename: "重命名",
+    remove: "删除会话…",
+    confirmRemove: "确认删除",
+    cancel: "取消",
+    close: "关闭",
+    moreOptions: "更多选项",
   },
   en: {
-      projects: "Projects",
-      pinned: "Pinned",
-      noChats: "No chats yet",
-      noProjects: "No projects",
-      untitled: "New session",
-      draft: "New session",
-      more: (n) => `Show more (${n})`,
-      less: "Show less",
-      chats: (n) => `${n} ${n === 1 ? "chat" : "chats"}`,
-      editProject: "Edit project",
-      newChat: "New session",
-      pinProject: "Pin project",
-      unpinProject: "Unpin project",
-      pinChat: "Pin chat",
-      unpinChat: "Unpin",
-      copyPath: "Copy path",
-      rename: "Rename",
-      remove: "Delete chat…",
-      confirmRemove: "Confirm delete",
-      cancel: "Cancel",
-      close: "Close",
-      moreOptions: "More options",
+    projects: "Projects",
+    pinned: "Pinned",
+    noChats: "No chats yet",
+    noProjects: "No projects",
+    untitled: "New session",
+    draft: "New session",
+    more: (n) => `Show more (${n})`,
+    less: "Show less",
+    chats: (n) => `${n} ${n === 1 ? "chat" : "chats"}`,
+    editProject: "Edit project",
+    newChat: "New session",
+    pinProject: "Pin project",
+    unpinProject: "Unpin project",
+    pinChat: "Pin chat",
+    unpinChat: "Unpin",
+    copyPath: "Copy path",
+    rename: "Rename",
+    remove: "Delete chat…",
+    confirmRemove: "Confirm delete",
+    cancel: "Cancel",
+    close: "Close",
+    moreOptions: "More options",
   },
 };
 let L = STRINGS.en;
@@ -81,6 +81,14 @@ function icon(name, size = 16, extra = "") {
   return `<svg viewBox="0 0 16 16" width="${size}" height="${size}" fill="${filled ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 }
 
+function appendSafe(el, ...children) {
+  for (const c of children.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    el.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return el;
+}
+
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -90,10 +98,7 @@ function h(tag, attrs, ...children) {
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    el.append(c.nodeType ? c : document.createTextNode(String(c)));
-  }
+  appendSafe(el, ...children);
   return el;
 }
 
@@ -139,8 +144,11 @@ function injectStyle() {
 .oc-cx-sess .oc-cx-title{color:inherit}
 .oc-cx-draft .oc-cx-title{font-style:italic;color:var(--v2-text-text-faint)}
 .oc-cx-srv{flex:none;font-size:11px;color:var(--v2-text-text-faint);max-width:70px;overflow:hidden;text-overflow:ellipsis}
+.oc-cx-srv:empty{display:none}
 .oc-cx-pinmark{flex:none;display:inline-flex;color:var(--v2-icon-icon-faint,currentColor);opacity:.7}
+.oc-cx-pinmark:empty{display:none}
 .oc-cx-status{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px}
+.oc-cx-status:empty{display:none}
 .oc-cx-dot{width:7px;height:7px;border-radius:50%;background:var(--v2-icon-icon-accent,#0a84ff)}
 .oc-cx-spin{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--v2-border-border-base,rgba(128,128,128,.4));border-top-color:var(--v2-icon-icon-muted,currentColor);animation:oc-cx-spin .8s linear infinite}
 @keyframes oc-cx-spin{to{transform:rotate(360deg)}}
@@ -182,12 +190,14 @@ function mountUi(host, api) {
 
   const state = {
     snap: null,
-    hash: "",
+    structureHash: "",
+    activeKey: "",
     pins: Object.assign({ projects: [], sessions: [] }, loadJson(LS_PINS, {})),
     ui: Object.assign({ projectsCollapsed: false, collapsed: {}, expanded: {} }, loadJson(LS_UI, {})),
     renaming: null,
     popup: null,
     card: null,
+    cardAnchor: null,
     cardTimer: 0,
     cardHide: 0,
   };
@@ -202,7 +212,7 @@ function mountUi(host, api) {
     if (i === -1) list.unshift(key);
     else list.splice(i, 1);
     savePins();
-    render();
+    poll(true);
   };
 
   const closePopup = () => {
@@ -212,12 +222,17 @@ function mountUi(host, api) {
       host.querySelectorAll(".has-menu").forEach((n) => n.classList.remove("has-menu"));
     }
   };
-  const hideCard = () => {
+
+  const hideCard = (force) => {
     clearTimeout(state.cardTimer);
     clearTimeout(state.cardHide);
     if (state.card) {
+      if (!force && state.cardAnchor && host.contains(state.cardAnchor) && state.cardAnchor.matches(":hover")) {
+        return;
+      }
       state.card.remove();
       state.card = null;
+      state.cardAnchor = null;
     }
   };
 
@@ -235,15 +250,17 @@ function mountUi(host, api) {
 
   const openMenu = (anchor, items, row) => {
     closePopup();
-    hideCard();
+    hideCard(true);
     const build = (list) => {
       const pop = h("div", { class: "oc-cx-pop", role: "menu" });
       for (const it of list) {
+        if (!it) continue;
         if (it.sep) {
-          pop.append(h("hr"));
+          appendSafe(pop, h("hr"));
           continue;
         }
-        pop.append(
+        appendSafe(
+          pop,
           h(
             "button",
             {
@@ -252,15 +269,9 @@ function mountUi(host, api) {
               class: it.danger ? "is-danger" : "",
               onclick: (e) => {
                 e.stopPropagation();
-                const next = it.onClick?.();
-                if (Array.isArray(next)) {
-                  const rect = pop.getBoundingClientRect();
-                  pop.remove();
-                  state.popup = build(next);
-                  place(state.popup, { right: rect.right, bottom: rect.top - 4 }, "left");
-                  return;
-                }
                 closePopup();
+                const next = it.onClick?.();
+                if (Array.isArray(next)) openMenu(anchor, next, row);
               },
             },
             it.icon ? h("span", { class: "oc-cx-ico", html: icon(it.icon, 15) }) : null,
@@ -281,7 +292,7 @@ function mountUi(host, api) {
   const onKey = (e) => {
     if (e.key === "Escape") {
       closePopup();
-      hideCard();
+      hideCard(true);
     }
   };
   document.addEventListener("pointerdown", onDocPointer, true);
@@ -289,11 +300,12 @@ function mountUi(host, api) {
   window.addEventListener("blur", closePopup);
   host.addEventListener("scroll", () => {
     closePopup();
-    hideCard();
+    hideCard(true);
   });
 
   const showCard = (g, row) => {
-    hideCard();
+    hideCard(true);
+    state.cardAnchor = row;
     const pinned = state.pins.projects.includes(g.key);
     const total = g.sessions.length;
     const card = h(
@@ -312,7 +324,7 @@ function mountUi(host, api) {
           onclick: (e) => {
             e.stopPropagation();
             togglePin(state.pins.projects, g.key);
-            hideCard();
+            hideCard(true);
           },
         }),
       ),
@@ -332,7 +344,7 @@ function mountUi(host, api) {
               {
                 class: "oc-cx-card-edit",
                 onclick: () => {
-                  hideCard();
+                  hideCard(true);
                   api.editProject(g.srv, g.worktree);
                 },
               },
@@ -344,13 +356,75 @@ function mountUi(host, api) {
     );
     card.addEventListener("mouseenter", () => clearTimeout(state.cardHide));
     card.addEventListener("mouseleave", () => {
-      state.cardHide = setTimeout(hideCard, 160);
+      state.cardHide = setTimeout(() => hideCard(true), 160);
     });
     state.card = card;
     const aside = host.closest("aside") || host;
     const ar = aside.getBoundingClientRect();
     const rr = row.getBoundingClientRect();
     place(card, { right: ar.right, top: rr.top, bottom: rr.bottom }, "right");
+  };
+
+  const markActive = (key) => {
+    state.activeKey = key || "";
+    const rows = host.querySelectorAll(".oc-cx-sess");
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const isThis = !!key && row.getAttribute("data-key") === key;
+      row.classList.toggle("is-active", isThis);
+    }
+  };
+
+  const updateStatuses = (snap) => {
+    const statusMap = new Map();
+    for (const sv of snap.servers || []) {
+      for (const s of sv.sessions || []) {
+        statusMap.set(sessKey(sv.key, s.id), s);
+      }
+    }
+    const statusEls = host.querySelectorAll(".oc-cx-status");
+    for (let i = 0; i < statusEls.length; i++) {
+      const el = statusEls[i];
+      const key = el.getAttribute("data-status-for");
+      if (!key) continue;
+      const s = statusMap.get(key);
+      const isCur = key === state.activeKey;
+      let nextHtml = "";
+      if (s?.loading) nextHtml = '<span class="oc-cx-spin"></span>';
+      else if (s?.unread && !isCur) nextHtml = '<span class="oc-cx-dot"></span>';
+      if (el.dataset.state !== nextHtml) {
+        el.dataset.state = nextHtml;
+        el.innerHTML = nextHtml;
+      }
+    }
+  };
+
+  const getStructureHash = (snap, pins, ui) => {
+    const parts = [];
+    for (const sv of snap.servers || []) {
+      parts.push(sv.key);
+      for (const p of sv.projects || []) {
+        parts.push(p.worktree, p.name || "");
+      }
+      for (const s of sv.sessions || []) {
+        parts.push(s.id, s.title, String(s.updated));
+      }
+    }
+    for (const d of snap.drafts || []) {
+      parts.push(d.key);
+    }
+    parts.push(
+      "PP:" + pins.projects.join(","),
+      "PS:" + pins.sessions.join(","),
+      "PC:" + (ui.projectsCollapsed ? "1" : "0"),
+    );
+    for (const [k, v] of Object.entries(ui.collapsed || {})) {
+      if (v) parts.push("C:" + k);
+    }
+    for (const [k, v] of Object.entries(ui.expanded || {})) {
+      if (v) parts.push("E:" + k);
+    }
+    return parts.join("\u0001");
   };
 
   const buildModel = (snap) => {
@@ -399,16 +473,27 @@ function mountUi(host, api) {
       const i = state.pins.projects.indexOf(g.key);
       return i === -1 ? Infinity : i;
     };
-    const ordered = projs.map((g, i) => ({ g, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).map((x) => x.g);
+    const ordered = projs.slice().sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+    });
     return { projs: ordered, pinnedSessions, pinnedKeys: new Set(pinnedSessions.map((s) => s.key)) };
   };
 
   const titleOf = (s) => (s.title && s.title.trim()) || L.untitled;
 
   const statusEl = (s) => {
-    if (s.loading) return h("span", { class: "oc-cx-status" }, h("span", { class: "oc-cx-spin" }));
-    if (s.unread && !s.active) return h("span", { class: "oc-cx-status" }, h("span", { class: "oc-cx-dot" }));
-    return null;
+    const el = h("span", { class: "oc-cx-status", "data-status-for": s.key });
+    if (s.loading) {
+      el.dataset.state = '<span class="oc-cx-spin"></span>';
+      appendSafe(el, h("span", { class: "oc-cx-spin" }));
+    } else if (s.unread && !s.active) {
+      el.dataset.state = '<span class="oc-cx-dot"></span>';
+      appendSafe(el, h("span", { class: "oc-cx-dot" }));
+    }
+    return el;
   };
 
   const commitRename = async (s, value, ok) => {
@@ -420,13 +505,13 @@ function mountUi(host, api) {
       } catch {}
       await poll(true);
     } else {
-      render();
+      poll(true);
     }
   };
 
   const sessionRow = (s, flat) => {
-    const cur = state.snap.current;
-    s.active = !!cur && cur.server === s.srv && cur.sessionId === s.id;
+    const curKey = state.activeKey;
+    s.active = !!curKey && curKey === s.key;
     const pinned = state.pins.sessions.includes(s.key);
     const renaming = state.renaming === s.key;
     const row = h("div", {
@@ -435,10 +520,15 @@ function mountUi(host, api) {
       tabindex: "0",
       title: titleOf(s),
       "data-key": s.key,
-      onclick: () => !renaming && api.openSession(s.srv, s.id, s.worktree),
+      onclick: () => {
+        if (state.renaming) return;
+        markActive(s.key);
+        api.openSession(s.srv, s.id, s.worktree);
+      },
       onkeydown: (e) => {
-        if (!renaming && (e.key === "Enter" || e.key === " ") && e.target === row) {
+        if (!state.renaming && (e.key === "Enter" || e.key === " ") && e.target === row) {
           e.preventDefault();
+          markActive(s.key);
           api.openSession(s.srv, s.id, s.worktree);
         }
       },
@@ -459,7 +549,7 @@ function mountUi(host, api) {
         },
         onblur: () => state.renaming && commitRename(s, input.value, true),
       });
-      row.append(input);
+      appendSafe(row, input);
       queueMicrotask(() => {
         input.focus();
         input.select();
@@ -486,7 +576,8 @@ function mountUi(host, api) {
         sessionMenu(s, dots, row);
       },
     });
-    row.append(
+    appendSafe(
+      row,
       h("span", { class: "oc-cx-title" }, titleOf(s)),
       pinned ? h("span", { class: "oc-cx-pinmark", html: icon("pin", 12, "filled") }) : null,
       statusEl(s),
@@ -537,16 +628,22 @@ function mountUi(host, api) {
   };
 
   const draftRow = (d) => {
+    const isAct = state.activeKey === d.key;
     const row = h(
       "div",
       {
-        class: "oc-cx-row oc-cx-sess oc-cx-draft" + (d.active ? " is-active" : ""),
+        class: "oc-cx-row oc-cx-sess oc-cx-draft" + (isAct ? " is-active" : ""),
         role: "button",
         tabindex: "0",
-        onclick: () => api.select(d.key),
+        "data-key": d.key,
+        onclick: () => {
+          markActive(d.key);
+          api.select(d.key);
+        },
         onkeydown: (e) => {
           if ((e.key === "Enter" || e.key === " ") && e.target === row) {
             e.preventDefault();
+            markActive(d.key);
             api.select(d.key);
           }
         },
@@ -583,7 +680,7 @@ function mountUi(host, api) {
           icon: "folder",
           onClick: () => {
             try {
-              navigator.clipboard?.writeText(g.worktree);
+              navigator.clipboard.writeText(g.worktree);
             } catch {}
           },
         },
@@ -603,8 +700,8 @@ function mountUi(host, api) {
       onclick: () => {
         state.ui.collapsed[g.key] = !collapsed;
         saveUi();
-        hideCard();
-        render();
+        hideCard(true);
+        poll(true);
       },
       onkeydown: (e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === row) {
@@ -624,7 +721,7 @@ function mountUi(host, api) {
       },
       onmouseleave: () => {
         clearTimeout(state.cardTimer);
-        state.cardHide = setTimeout(hideCard, 160);
+        state.cardHide = setTimeout(() => hideCard(true), 160);
       },
     });
     const dots = h("button", {
@@ -637,7 +734,8 @@ function mountUi(host, api) {
         projectMenu(g, dots, row);
       },
     });
-    row.append(
+    appendSafe(
+      row,
       h("span", { class: "oc-cx-ico", html: icon(collapsed ? "folder" : "folderOpen", 17) }),
       h("span", { class: "oc-cx-name" }, g.name),
       multi ? h("span", { class: "oc-cx-srv" }, g.srvName) : null,
@@ -677,7 +775,7 @@ function mountUi(host, api) {
             onclick: () => {
               state.ui.expanded[g.key] = !expanded;
               saveUi();
-              render();
+              poll(true);
             },
           },
           expanded ? L.less : L.more(visible.length - SESSION_PREVIEW),
@@ -689,7 +787,6 @@ function mountUi(host, api) {
 
   function render() {
     if (!state.snap) return;
-    hideCard();
     const scroll = host.scrollTop;
     const model = buildModel(state.snap);
     const multi = state.snap.multi;
@@ -708,7 +805,7 @@ function mountUi(host, api) {
           onclick: () => {
             state.ui.projectsCollapsed = !state.ui.projectsCollapsed;
             saveUi();
-            render();
+            poll(true);
           },
         },
         L.projects,
@@ -734,10 +831,20 @@ function mountUi(host, api) {
       } catch {
         return;
       }
-      const hash = JSON.stringify(snap);
-      if (hash === state.hash && !force) return;
-      state.hash = hash;
+      const curKey = snap.currentKey || (snap.current ? sessKey(snap.current.server, snap.current.sessionId) : "");
+      const structureHash = getStructureHash(snap, state.pins, state.ui);
+
+      if (structureHash === state.structureHash && !force) {
+        if (curKey !== state.activeKey) {
+          markActive(curKey);
+        }
+        updateStatuses(snap);
+        return;
+      }
+
+      state.structureHash = structureHash;
       state.snap = snap;
+      state.activeKey = curKey;
       if (state.renaming) return;
       render();
     } finally {
@@ -757,7 +864,7 @@ function mountUi(host, api) {
     const p = loadJson(LS_PINS, {});
     state.pins.projects = Array.isArray(p.projects) ? p.projects : [];
     state.pins.sessions = Array.isArray(p.sessions) ? p.sessions : [];
-    render();
+    poll(true);
   });
 
   let lastRefresh = 0;
@@ -779,7 +886,7 @@ function mountUi(host, api) {
     } else if (seen && ++missing > 20) {
       clearInterval(timer);
       closePopup();
-      hideCard();
+      hideCard(true);
       document.removeEventListener("pointerdown", onDocPointer, true);
       document.removeEventListener("keydown", onKey, true);
       return;
@@ -825,7 +932,7 @@ export function mount(host, deps) {
   };
   const srvName = (sv, key) => {
     try {
-      return sv.displayName || new URL(sv.http.url).host;
+      return sv.name || (deps.servers.local(sv) ? "Local" : key);
     } catch {
       return key;
     }
@@ -902,6 +1009,7 @@ export function mount(host, deps) {
       drafts,
       multi: list.length > 1,
       current: cur && cur.type === "session" ? { server: cur.server, sessionId: cur.sessionId } : null,
+      currentKey: cur && cur.type === "session" ? sessKey(cur.server, cur.sessionId) : curKey,
     };
   };
 
@@ -941,12 +1049,12 @@ export function mount(host, deps) {
       const ctx = ctxOf(srv);
       const raw = rawSessions.get(sessKey(srv, id)) || ctx?.data.session.get(id);
       try {
-        ctx?.data.session.message.sync(id).catch(() => {});
         if (raw) ctx?.data.session.remember(raw);
-        ctx?.projects.open(worktree);
-        ctx?.projects.touch(worktree);
       } catch {}
       const t = deps.tabsStore.addSessionTab({ server: srv, sessionId: id });
+      if (t && t.type === "session" && deps.tabsStore.rememberSessionRoute) {
+        deps.tabsStore.rememberSessionRoute(t, id);
+      }
       deps.tabsStore.select(t);
     },
     newSession: (srv, worktree) => {
