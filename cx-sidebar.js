@@ -486,7 +486,7 @@ function mountUi(host, api) {
         parts.push(p.worktree, p.name || "");
       }
       for (const s of sv.sessions || []) {
-        parts.push(s.id, s.title, String(s.updated));
+        parts.push(s.id, s.title);
       }
     }
     for (const d of snap.drafts || []) {
@@ -534,7 +534,27 @@ function mountUi(host, api) {
       for (const s of sv.sessions) {
         const k = projKey(sv.key, s.worktree);
         if (hiddenSet.has(k)) continue;
-        const g = byKey.get(k);
+        let g = byKey.get(k);
+        if (!g && s.worktree) {
+          const dirNorm = norm(s.worktree);
+          for (const cand of byKey.values()) {
+            if (cand.dirs.includes(dirNorm)) {
+              g = cand;
+              break;
+            }
+          }
+        }
+        if (!g && s.projectID) {
+          for (const cand of byKey.values()) {
+            if (cand.id === s.projectID) {
+              g = cand;
+              break;
+            }
+          }
+        }
+        if (!g && byKey.size === 1) {
+          g = byKey.values().next().value;
+        }
         if (!g) continue;
         g.sessions.push({ ...s, srv: sv.key, key: sessKey(sv.key, s.id), project: g });
       }
@@ -550,7 +570,12 @@ function mountUi(host, api) {
         }
       }
     }
-    for (const g of projs) g.sessions.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const compareSessions = (a, b) => {
+      const diff = (b.updated || 0) - (a.updated || 0);
+      if (diff !== 0) return diff;
+      return (a.id || "").localeCompare(b.id || "");
+    };
+    for (const g of projs) g.sessions.sort(compareSessions);
     const all = projs.flatMap((g) => g.sessions);
     const pinnedSessions = state.pins.sessions.map((k) => all.find((s) => s.key === k)).filter(Boolean);
     const rank = (g) => {
@@ -1093,6 +1118,7 @@ export function mount(host, deps) {
       id: raw.id,
       title: raw.title || "",
       worktree: raw.location?.directory || "",
+      projectID: raw.projectID || "",
       updated: raw.time?.updated ?? raw.time?.created ?? 0,
       loading,
       unread,
@@ -1109,12 +1135,30 @@ export function mount(host, deps) {
       if (!ctx) continue;
       let projects = [];
       try {
-        projects = (ctx.projects.list() || []).map((p) => ({ worktree: p.worktree, name: p.name, sandboxes: p.sandboxes }));
+        projects = (ctx.projects.list() || []).map((p) => ({
+          id: p.id,
+          worktree: p.worktree,
+          name: p.name,
+          sandboxes: p.sandboxes,
+        }));
       } catch {}
       const merged = new Map();
       for (const [id, raw] of rawSessions) if (id.startsWith(key + "\u0000")) merged.set(id.slice(key.length + 1), raw);
       try {
-        for (const s of ctx.data.session.list() || []) merged.set(s.id, s);
+        for (const s of ctx.data.session.list() || []) {
+          const base = merged.get(s.id);
+          if (base) {
+            merged.set(s.id, {
+              ...s,
+              title: s.title || base.title,
+              location: s.location || base.location,
+              projectID: s.projectID || base.projectID,
+              time: base.time || s.time,
+            });
+          } else {
+            merged.set(s.id, s);
+          }
+        }
       } catch {}
       const sessions = [];
       for (const raw of merged.values()) {
@@ -1182,11 +1226,11 @@ export function mount(host, deps) {
       if (i !== -1) deps.tabsStore.closeTab(i);
     },
     openSession: (srv, id, worktree) => {
-      const ctx = ctxOf(srv);
-      const raw = rawSessions.get(sessKey(srv, id)) || ctx?.data.session.get(id);
-      try {
-        if (raw) ctx?.data.session.remember(raw);
-      } catch {}
+      const existing = deps.tabs.find((t) => t.type === "session" && t.server === srv && t.sessionId === id);
+      if (existing) {
+        deps.tabsStore.select(existing);
+        return;
+      }
       const t = deps.tabsStore.addSessionTab({ server: srv, sessionId: id });
       if (t && t.type === "session" && deps.tabsStore.rememberSessionRoute) {
         deps.tabsStore.rememberSessionRoute(t, id);
