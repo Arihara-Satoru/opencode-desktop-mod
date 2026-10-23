@@ -231,10 +231,19 @@ function resolvePanelSymbols(origPanelSrc, origRouteSrc, origMainSrc) {
     if (m) cleanupExport = m[1];
   }
 
+  let useExtensionExport = panelImports["p"] || "qr";
+  const useExtInternalMatch = origMainSrc.match(
+    /function\s+([a-zA-Z0-9_$]+)\(\)\{let\s+[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+\);if\(![a-zA-Z0-9_$]+\)throw Error\([`'"]useExtension must run inside an extension contribution[`'"]\)/
+  );
+  if (useExtInternalMatch) {
+    const m = exportsStr.match(new RegExp(`\\b${useExtInternalMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
+    if (m) useExtensionExport = m[1];
+  }
+
   return {
     onChange: panelImports["t"] || "El",
     Tooltip: panelImports["i"] || "Pn",
-    useExtension: "Jr",
+    useExtension: useExtensionExport,
     IconButton: panelImports["r"] || "Ln",
     createMemo: panelImports["c"] || "gl",
     ScrollView: panelImports["g"] || "wn",
@@ -406,38 +415,38 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   }
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
-  const vTabsPrefix = "Vae(),(()=>{var ";
-  const pStart = out.indexOf(vTabsPrefix);
+  const vTabsRegex = /([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),(\{orientation:[`'"]vertical[`'"],[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\})\)\),\2\}\)\(\)/;
+  const vMatch = out.match(vTabsRegex);
   let vTabsInjected = false;
-  if (pStart !== -1) {
-    const pEndMatch = out.slice(pStart).match(/\.reorder\([a-zA-Z0-9_$]+\)\}\)\),([a-zA-Z0-9_$]+)\}\)\(\)/);
-    if (pEndMatch) {
-      const pEnd = pStart + pEndMatch.index + pEndMatch[0].length;
-      const originalBlock = out.slice(pStart, pEnd);
-      const mInside = originalBlock.match(
-        /Vae\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=Hae\(\);return\s+([a-zA-Z0-9_$]+)\(\1,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),([\s\S]+)\)\),\1\}\)\(\)/
-      );
-      if (mInside) {
-        const [, cVar, insFn, crComp, i5Var, props] = mInside;
-        const replacement = [
-          "Vae(),(()=>{",
-          `var ${cVar}=Hae(),orig=${crComp}(${i5Var},${props}),host=document.createElement('div'),origWrap=document.createElement('div');`,
-          "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
-          "origWrap.style.display='none';",
-          `${insFn}(origWrap,orig);`,
-          "var deps={servers:s,tabsStore:d,tabs:_,current:()=>D(),tabKey:jR,serverKey:Q.key,settings:(()=>{try{return zU()}catch(e){return null}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};",
-          // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
-          "var cxDisposed=!1,cxDispose;",
-          "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
-          `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
-          "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
-          `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
-          "})()",
-        ].join("");
-        out = out.slice(0, pStart) + replacement + out.slice(pEnd);
-        vTabsInjected = true;
-      }
-    }
+  if (vMatch) {
+    const [full, prefixFn, cVar, hVar, insFn, crComp, i5Var, props] = vMatch;
+    const tabsVar = props.match(/tabs:([a-zA-Z0-9_$]+)/)?.[1] || "_";
+    const currentTabFn = props.match(/get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\}/)?.[1] || "D";
+    const tabsStoreVar = props.match(/onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{([a-zA-Z0-9_$]+)\.select/)?.[1] || "d";
+    const tabKeyFn = props.match(/findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)===\1\(/)?.[1] || "AR";
+
+    const settingsHookMatch = src.match(/var\{use:([a-zA-Z0-9_$]+),provider:([a-zA-Z0-9_$]+)\}=Yi\(\{name:[`'"]SettingsSurface[`'"]/);
+    const settingsHook = settingsHookMatch ? settingsHookMatch[1] : "RU";
+    const settingsProvider = settingsHookMatch ? settingsHookMatch[2] : "zU";
+
+    const replacement = [
+      `${prefixFn}(),(()=>{`,
+      `var ${cVar}=${hVar}(),orig=${crComp}(${i5Var},${props}),host=document.createElement('div'),origWrap=document.createElement('div');`,
+      "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
+      "origWrap.style.display='none';",
+      `${insFn}(origWrap,orig);`,
+      `var deps={servers:s,tabsStore:${tabsStoreVar},tabs:${tabsVar},current:()=>${currentTabFn}(),tabKey:${tabKeyFn},serverKey:Q.key,settings:(()=>{try{return ${settingsHook}()}catch(e){try{return ${settingsProvider}()}catch(e2){return null}}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};`,
+      // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
+      "var cxDisposed=!1,cxDispose;",
+      "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
+      `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
+      "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
+      `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
+      "})()",
+    ].join("");
+
+    out = out.slice(0, vMatch.index) + replacement + out.slice(vMatch.index + full.length);
+    vTabsInjected = true;
   }
 
   if (vTabsInjected) {
@@ -451,7 +460,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   return out;
 }
 
-function patchSessionRouteBundle(src) {
+function patchSessionRouteBundle(src, origMainSrc = "", symbols = {}) {
   let out = src;
 
   // 1. Allow right side panel to be resized down to 340px instead of 480px minimum
@@ -486,7 +495,7 @@ function patchSessionRouteBundle(src) {
     }
   }
 
-  // 3. Expose virtualizer instance M and scrollAdjustment flusher be() on window.__oc_virtual_scroll
+  // 3. Expose virtualizer instance M and scrollAdjustment flusher on window.__oc_virtual_scroll
   const revealMatch = out.match(
     /e\.setRevealMessage\?\.\(\(([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+)\)=>\{(?:if\(![a-zA-Z0-9_$]+\(\)\)return;)?let [a-zA-Z0-9_$]+=\2\?([a-zA-Z0-9_$]+)\(\)\.findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[`'"]AssistantPart[`'"]\)[^}]+?([a-zA-Z0-9_$]+)\.scrollToIndex/
   );
@@ -494,9 +503,11 @@ function patchSessionRouteBundle(src) {
     const itemsFn = revealMatch[3];
     const checkFn = revealMatch[4];
     const virtVar = revealMatch[5];
+    const flusherMatch = revealMatch[0].match(/([a-zA-Z0-9_$]+)\(\),[a-zA-Z0-9_$]+\.scrollToIndex/);
+    const flusherVar = flusherMatch ? flusherMatch[1] : "be";
     out = out.replace(
       "e.setRevealMessage?.((t,r)=>{",
-      `window.__oc_virtual_scroll={M:${virtVar},be,getRowIndex:(t,r)=>{let i=r?${itemsFn}().findIndex(e=>${checkFn}(e,\`AssistantPart\`)&&e.group.type===\`part\`&&e.group.ref.partID===r):-1;return i>=0?i:e.projection.messageRowIndex().get(t)}},e.setRevealMessage?.((t,r)=>{`
+      `window.__oc_virtual_scroll={M:${virtVar},be:${flusherVar},unpin:${flusherVar},getRowIndex:(t,r)=>{let i=r?${itemsFn}().findIndex(e=>${checkFn}(e,\`AssistantPart\`)&&e.group.type===\`part\`&&e.group.ref.partID===r):-1;return i>=0?i:e.projection.messageRowIndex().get(t)}},e.setRevealMessage?.((t,r)=>{`
     );
   } else {
     throw new Error("Could not locate e.setRevealMessage in route bundle.");
@@ -512,14 +523,37 @@ function patchSessionRouteBundle(src) {
     }
   }
 
-  const sigFn = routeImports["bl"] || "en";
-  const toastFn = routeImports["di"] || "Ot";
-  const sessionUrlFn = routeImports["Ir"] || "M";
-  const sdkHook = routeImports["gi"] || "nt";
-  const srvHook = routeImports["yi"] || "pt";
-  const stHook = routeImports["vi"] || "Jn";
-  const navHook = routeImports["Zs"] || "xn";
-  const prmHook = routeImports["Qs"] || "Nn";
+  const exportIdx = origMainSrc ? origMainSrc.lastIndexOf("export{") : -1;
+  const exportsStr = exportIdx !== -1 ? origMainSrc.slice(exportIdx) : "";
+  function getExportAlias(internalName) {
+    if (!internalName) return null;
+    const m = exportsStr.match(new RegExp(`\\b${internalName}\\s+as\\s+([a-zA-Z0-9_$]+)`));
+    return m ? m[1] : null;
+  }
+
+  const sessionUrlInternal = origMainSrc?.match(/function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{return`\/server\/\$\{/)?.[1];
+  const sessionUrlExport = getExportAlias(sessionUrlInternal);
+
+  const sdkInternal = origMainSrc?.match(/var\s+([a-zA-Z0-9_$]+)=\(\)=>([a-zA-Z0-9_$]+)\(\)\.ctx\.sdk/);
+  const sdkExport = getExportAlias(sdkInternal?.[1]);
+  const srvExport = getExportAlias(sdkInternal?.[2]);
+
+  const stInternal = origMainSrc?.match(/var\s+([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.ctx\.data/)?.[1];
+  const stExport = getExportAlias(stInternal);
+
+  const navInternal = origMainSrc?.match(/([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.navigatorFactory\(\)/)?.[1];
+  const prmInternal = origMainSrc?.match(/([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.params\b/)?.[1];
+  const navExport = getExportAlias(navInternal);
+  const prmExport = getExportAlias(prmInternal);
+
+  const sigFn = (symbols?.createSignal && routeImports[symbols.createSignal]) || routeImports["bl"] || "en";
+  const toastFn = routeImports["di"] || (symbols?.showToast && routeImports[symbols.showToast]) || "Ot";
+  const sessionUrlFn = (sessionUrlExport && routeImports[sessionUrlExport]) || routeImports["Ir"] || "M";
+  const sdkHook = (sdkExport && routeImports[sdkExport]) || routeImports["gi"] || "nt";
+  const srvHook = (srvExport && routeImports[srvExport]) || routeImports["yi"] || "pt";
+  const stHook = (stExport && routeImports[stExport]) || routeImports["vi"] || "Jn";
+  const navHook = (navExport && routeImports[navExport]) || routeImports["Zs"] || "xn";
+  const prmHook = (prmExport && routeImports[prmExport]) || routeImports["Qs"] || "Nn";
 
   const declRegex = /\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=[a-zA-Z0-9_$]+\(!1\),[a-zA-Z0-9_$]+=async\(\)=>\{await [a-zA-Z0-9_$]+\(e\.text\)&&\(.+?setTimeout\(.+?2e3\)\)\};/;
   const declMatch = out.match(declRegex);
@@ -790,7 +824,7 @@ function main() {
   );
 
   const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
-  const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
+  const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc, origMainSrc, symbols), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
   const customSidebarSrc = fs.readFileSync(customSidebarPath, "utf8");
