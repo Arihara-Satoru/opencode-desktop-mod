@@ -22,6 +22,9 @@
  *    - Hover card for projects: pin, chats count, worktree path, direct edit-project trigger
  *    - Pinned section at top for pinned sessions; pinned projects hoisted to top
  *    - Context menu: pin/unpin, rename, delete chat, new chat in project, copy path
+ * 5. Voice input beside the main composer send button (语音输入)
+ *    - Explicit recording/upload, configurable OpenAI-compatible transcription service
+ *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
@@ -35,6 +38,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
@@ -823,13 +827,23 @@ function main() {
     `import { t as TextShimmer } from "./${shimmerFileName}"`
   );
 
-  const patchedMainBuf = Buffer.from(patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
+  const patchedMainBuf = Buffer.from(`import "./voice-input.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc, origMainSrc, symbols), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
   const customSidebarSrc = fs.readFileSync(customSidebarPath, "utf8");
   const patchedSidebarBuf = Buffer.from(customSidebarSrc, "utf8");
   const sidebarFileName = "sidebar-codex.js";
+
+  const desktopFiles = header?.files?.out?.files?.main?.files;
+  const preloadFiles = header?.files?.out?.files?.preload?.files;
+  if (!desktopFiles?.["index.js"] || !preloadFiles?.["index.cjs"]) throw new Error("缺少桌面主进程或 preload，无法接入语音输入。");
+  const voiceFiles = [
+    [desktopFiles, "index.js", Buffer.from(patchVoiceDesktopMain(readFileFromAsar(payload, desktopFiles["index.js"]).toString("utf8")))],
+    [preloadFiles, "index.cjs", Buffer.concat([readFileFromAsar(payload, preloadFiles["index.cjs"]), Buffer.from("\n" + fs.readFileSync(path.join(__dirname, "voice-preload.cjs"), "utf8"))])],
+    ...["voice-main.mjs", "voice-shared.mjs", "voice-service.mjs"].map(name => [desktopFiles, name, fs.readFileSync(path.join(__dirname, name))]),
+    ...["voice-input.mjs", "voice-recorder.mjs", "voice-shared.mjs", "voice-audio.mjs"].map(name => [assetsMap, name, fs.readFileSync(path.join(__dirname, name))]),
+  ];
 
   // Append patched files to the end of payload so all existing offsets remain untouched
   let currentOffset = payload.length;
@@ -862,6 +876,11 @@ function main() {
   };
   currentOffset += patchedSidebarBuf.length;
 
+  for (const [map, name, buffer] of voiceFiles) {
+    map[name] = { size: buffer.length, offset: String(currentOffset), integrity: computeIntegrity(buffer) };
+    currentOffset += buffer.length;
+  }
+
   const newHeaderJsonBuf = Buffer.from(JSON.stringify(header), "utf8");
   const u3 = newHeaderJsonBuf.length;
   const alignedJsonLen = Math.ceil(u3 / 4) * 4;
@@ -883,6 +902,7 @@ function main() {
     patchedRouteBuf,
     patchedPanelBuf,
     patchedSidebarBuf,
+    ...voiceFiles.map(([, , buffer]) => buffer),
   ]);
 
   fs.writeFileSync(asarPath, finalAsarBuf);
