@@ -1,7 +1,7 @@
 import { MAX_AUDIO_BYTES } from "./voice-shared.mjs";
 
 // MediaRecorder lifecycle is isolated so cancellation and permission races are testable.
-export function createRecorder({ bridge, mediaDevices, Recorder, onState, onText, onError, prepareAudio, timers = globalThis }) {
+export function createRecorder({ bridge, mediaDevices, Recorder, onState, onText, onError, prepareAudio, onStream, timers = globalThis }) {
   let generation = 0;
   let recorder, stream, timeout;
   let chunks = [], size = 0;
@@ -13,6 +13,7 @@ export function createRecorder({ bridge, mediaDevices, Recorder, onState, onText
     timers.clearTimeout(timeout);
     stream?.getTracks().forEach(track => track.stop());
     stream = undefined;
+    onStream?.(null);
   };
   const cancel = () => {
     const wasActive = state !== "idle";
@@ -36,6 +37,7 @@ export function createRecorder({ bridge, mediaDevices, Recorder, onState, onText
       const acquired = await mediaDevices.getUserMedia({ audio: true, video: false });
       if (token !== generation) { acquired.getTracks().forEach(t => t.stop()); return; }
       stream = acquired;
+      onStream?.(stream);
       const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find(type => Recorder.isTypeSupported(type));
       if (!mime) throw new Error("当前环境没有可用的录音编码器。");
       recorder = new Recorder(stream, { mimeType: mime });
@@ -87,5 +89,5 @@ export function createRecorder({ bridge, mediaDevices, Recorder, onState, onText
     try { recorder.stop(); } catch { cancel(); onError("无法结束录音，请重试。"); }
     release();
   };
-  return { start, stop, cancel, state: () => state };
+  return { start, stop, cancel, state: () => state, stream: () => stream };
 }

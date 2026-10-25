@@ -93,6 +93,37 @@ const STYLE = `
   letter-spacing: 0.5px;
   flex-shrink: 0;
 }
+/* --- Live Frequency Spectrum Visualizer --- */
+.oc-voice-visualizer {
+  display: inline-flex;
+  align-items: center;
+  gap: 2.5px;
+  height: 18px;
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+.oc-voice-visualizer[hidden] {
+  display: none !important;
+}
+.oc-voice-bar {
+  width: 2.5px;
+  height: 3.5px;
+  min-height: 3.5px;
+  max-height: 16px;
+  border-radius: 999px;
+  background: #ef4444;
+  transition: background-color 0.2s ease;
+  will-change: height;
+}
+.oc-voice-visualizer[data-theme="recording"] .oc-voice-bar {
+  background: #ef4444;
+}
+.oc-voice-visualizer[data-theme="converting"] .oc-voice-bar {
+  background: #3b82f6;
+}
+.oc-voice-visualizer[data-theme="transcribing"] .oc-voice-bar {
+  background: #8b5cf6;
+}
 .oc-voice-status-msg {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -372,6 +403,122 @@ function button(text, fn) {
   return el;
 }
 
+export function createSpectrumVisualizer(container) {
+  const count = 5;
+  const bars = [];
+  container.innerHTML = "";
+  for (let i = 0; i < count; i++) {
+    const bar = document.createElement("span");
+    bar.className = "oc-voice-bar";
+    bar.style.height = "3.5px";
+    container.appendChild(bar);
+    bars.push(bar);
+  }
+
+  let audioCtx = null;
+  let analyser = null;
+  let source = null;
+  let timerId = null;
+  let mode = "idle";
+  const heights = new Float32Array(count).fill(3.5);
+  const sampleIndices = [1, 3, 5, 8, 12];
+
+  const setTheme = (theme) => {
+    container.setAttribute("data-theme", theme);
+  };
+
+  const render = () => {
+    if (mode === "live" && analyser) {
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      const now = performance.now() / 200;
+      for (let i = 0; i < count; i++) {
+        const binIndex = sampleIndices[i] || i;
+        const val = data[binIndex] || 0;
+        const idle = Math.sin(now + i * 0.7) * 0.8;
+        const target = Math.max(3.5, 3.5 + (val / 255) * 12.5 + (val < 10 ? idle : 0));
+        heights[i] = heights[i] * 0.65 + target * 0.35;
+        bars[i].style.height = `${heights[i].toFixed(1)}px`;
+      }
+    } else if (mode === "wave") {
+      const now = performance.now() / 150;
+      for (let i = 0; i < count; i++) {
+        const h = 4 + Math.sin(now + i * 0.8) * 5 + 5;
+        bars[i].style.height = `${h.toFixed(1)}px`;
+      }
+    }
+  };
+
+  const stopNodes = () => {
+    if (source) {
+      try { source.disconnect(); } catch {}
+      source = null;
+    }
+    if (analyser) {
+      try { analyser.disconnect(); } catch {}
+      analyser = null;
+    }
+    if (audioCtx) {
+      try { audioCtx.close(); } catch {}
+      audioCtx = null;
+    }
+  };
+
+  const startLoop = () => {
+    if (timerId) clearInterval(timerId);
+    timerId = setInterval(render, 35);
+  };
+
+  const startLive = (stream) => {
+    stopNodes();
+    if (!stream) {
+      startWave();
+      return;
+    }
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) {
+        startWave();
+        return;
+      }
+      audioCtx = new AudioCtx();
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+      source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.5;
+      source.connect(analyser);
+      mode = "live";
+      startLoop();
+    } catch {
+      startWave();
+    }
+  };
+
+  const startWave = () => {
+    stopNodes();
+    mode = "wave";
+    startLoop();
+  };
+
+  const stop = () => {
+    mode = "idle";
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+    stopNodes();
+    for (let i = 0; i < count; i++) {
+      heights[i] = 3.5;
+      if (bars[i]) bars[i].style.height = "3.5px";
+    }
+  };
+
+  return { setTheme, startLive, startWave, stop };
+}
+
 async function settings(bridge, anchor) {
   // Always clean up any existing dialogs to guarantee a fresh, responsive opening
   document.querySelectorAll(".oc-voice-dialog").forEach(d => {
@@ -611,8 +758,10 @@ export function mountVoiceInput() {
     const statusLeft = node("div", "", "oc-voice-status-left");
     const pulseDot = node("span", "", "oc-voice-pulse-dot");
     const timerEl = node("span", "00:00", "oc-voice-timer");
+    const visualizerEl = node("div", "", "oc-voice-visualizer");
+    const visualizer = createSpectrumVisualizer(visualizerEl);
     const message = node("span", "", "oc-voice-status-msg"); message.setAttribute("role", "status"); message.setAttribute("aria-live", "polite");
-    statusLeft.append(pulseDot, timerEl, message);
+    statusLeft.append(pulseDot, timerEl, visualizerEl, message);
 
     const statusActions = node("div", "", "oc-voice-status-actions");
     const finishButton = node("button", "完成", "oc-voice-btn oc-voice-btn-primary");
@@ -632,6 +781,8 @@ export function mountVoiceInput() {
 
     let context, lastState = "idle", started = 0, recordingProvider;
     const showError = text => {
+      visualizer.stop();
+      visualizerEl.hidden = true;
       status.hidden = false;
       pulseDot.style.background = "#ef4444";
       timerEl.hidden = true;
@@ -647,6 +798,7 @@ export function mountVoiceInput() {
     // Setting button NEVER blocked: cancels active recording and opens settings modal directly
     configButton.addEventListener("click", () => {
       if (lastState !== "idle") recorder.cancel();
+      visualizer.stop();
       status.hidden = true;
       void settings(bridge, mic).catch(e => showError(e.message));
     });
@@ -654,12 +806,20 @@ export function mountVoiceInput() {
     // Cancel button aborts immediately
     cancelButton.addEventListener("click", () => {
       recorder.cancel();
+      visualizer.stop();
       status.hidden = true;
     });
 
     const recorder = createRecorder({
       bridge, mediaDevices: navigator.mediaDevices, Recorder: window.MediaRecorder,
       prepareAudio: blob => recordingProvider === "mimo" ? toWav(blob) : blob.arrayBuffer().then(buffer => ({ bytes: new Uint8Array(buffer), mime: blob.type })),
+      onStream(stream) {
+        if (stream) {
+          visualizer.startLive(stream);
+        } else {
+          visualizer.stop();
+        }
+      },
       onState(state) {
         lastState = state;
         if (state === "recording") started = Date.now();
@@ -670,6 +830,8 @@ export function mountVoiceInput() {
         status.hidden = state === "idle";
 
         if (state === "recording") {
+          visualizerEl.hidden = false;
+          visualizer.setTheme("recording");
           pulseDot.hidden = false;
           pulseDot.style.background = "#ef4444";
           timerEl.hidden = false;
@@ -679,12 +841,16 @@ export function mountVoiceInput() {
           finishButton.textContent = "完成";
           message.textContent = "录音中 · 点击「完成」或麦克风结束";
         } else if (state === "permission") {
+          visualizerEl.hidden = true;
           pulseDot.hidden = false;
           pulseDot.style.background = "#f59e0b";
           timerEl.hidden = true;
           finishButton.hidden = true;
           message.textContent = "正在请求麦克风权限…";
         } else if (state === "converting") {
+          visualizerEl.hidden = false;
+          visualizer.setTheme("converting");
+          visualizer.startWave();
           pulseDot.hidden = false;
           pulseDot.style.background = "#3b82f6";
           timerEl.hidden = true;
@@ -693,6 +859,9 @@ export function mountVoiceInput() {
           finishButton.textContent = "处理中…";
           message.textContent = "正在本地转换 WAV 音频…";
         } else if (state === "transcribing" || state === "stopping") {
+          visualizerEl.hidden = false;
+          visualizer.setTheme("transcribing");
+          visualizer.startWave();
           pulseDot.hidden = false;
           pulseDot.style.background = "#8b5cf6";
           timerEl.hidden = true;
@@ -702,7 +871,10 @@ export function mountVoiceInput() {
           message.textContent = "正在向服务转写文字，可点击取消…";
         }
 
-        if (state === "idle" && active === recorder) active = undefined;
+        if (state === "idle") {
+          visualizer.stop();
+          if (active === recorder) active = undefined;
+        }
       },
       onText(text) {
         if (!context || context.url !== location.href || !editor.isConnected || editor.textContent !== context.draft || !insertTranscript(editor, text, context.range)) showResult(text);
@@ -753,7 +925,7 @@ export function mountVoiceInput() {
         timerEl.textContent = `${m}:${s}`;
       }
     }, 500);
-    mounts.set(form, () => { recorder.cancel(); clearInterval(timer); mic.remove(); status.remove(); });
+    mounts.set(form, () => { recorder.cancel(); visualizer.stop(); clearInterval(timer); mic.remove(); status.remove(); });
   }
   let queued = false;
   function scan() {

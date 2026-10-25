@@ -73,7 +73,7 @@ function harness(overrides = {}) {
     stop() { this.state = "inactive"; queueMicrotask(() => { this.ondataavailable({ data: new Blob(["voice"]) }); this.onstop(); }); }
   }
   const bridge = { arm: async () => {}, cancel: async () => { cancelled++; }, transcribe: async () => { uploads++; return "识别文字"; }, ...overrides.bridge };
-  const recorder = createRecorder({ bridge, mediaDevices: { getUserMedia: overrides.getUserMedia || (async () => stream) }, Recorder, prepareAudio: overrides.prepareAudio, onState: s => states.push(s), onText: s => texts.push(s), onError: s => errors.push(s), timers: { setTimeout: fn => { timers.set(1, fn); return 1; }, clearTimeout: id => timers.delete(id) } });
+  const recorder = createRecorder({ bridge, mediaDevices: { getUserMedia: overrides.getUserMedia || (async () => stream) }, Recorder, prepareAudio: overrides.prepareAudio, onStream: overrides.onStream, onState: s => states.push(s), onText: s => texts.push(s), onError: s => errors.push(s), timers: { setTimeout: fn => { timers.set(1, fn); return 1; }, clearTimeout: id => timers.delete(id) } });
   return { recorder, states, texts, errors, timers, stream, instance: () => instance, stopped: () => stopped, uploads: () => uploads, cancelled: () => cancelled };
 }
 {
@@ -112,6 +112,15 @@ function harness(overrides = {}) {
 }
 {
   const h = harness(); h.recorder.cancel(); assert.equal(h.cancelled(), 0, "Disposing an idle composer must not abort another composer's upload");
+}
+{
+  let receivedStream = undefined;
+  const h = harness({ onStream: s => { receivedStream = s; } });
+  await h.recorder.start();
+  assert.equal(receivedStream, h.stream, "createRecorder must supply live stream to onStream callback");
+  h.recorder.stop();
+  await tick();
+  assert.equal(receivedStream, null, "createRecorder must notify onStream callback on release");
 }
 
 // Exercise the actual main-process bridge with mock Electron, filesystem and fetch.
