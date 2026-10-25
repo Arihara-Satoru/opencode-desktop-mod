@@ -43,6 +43,7 @@ import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
 const customSidebarPath = path.join(__dirname, "cx-sidebar.js");
+const customChatWidthPath = path.join(__dirname, "chat-width.js");
 
 function getCandidateAsarPaths() {
   const custom = process.env.OPENCODE_ASAR_PATH;
@@ -183,7 +184,8 @@ function isAsarPatched(header, payload) {
       mainBuf.includes(Buffer.from("window.__oc_app_ext")) ||
       mainBuf.includes(Buffer.from("window.__oc_btw_slash")) ||
       mainBuf.includes(Buffer.from("/btw 随时问答")) ||
-      mainBuf.includes(Buffer.from("sidebar-codex.js"))
+      mainBuf.includes(Buffer.from("sidebar-codex.js")) ||
+      mainBuf.includes(Buffer.from("chat-width.js"))
     );
   } catch {
     return false;
@@ -843,13 +845,17 @@ function main() {
     `import { t as TextShimmer } from "./${shimmerFileName}"`
   );
 
-  const patchedMainBuf = Buffer.from(`import "./voice-input.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
+  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc, origMainSrc, symbols), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
   const customSidebarSrc = fs.readFileSync(customSidebarPath, "utf8");
   const patchedSidebarBuf = Buffer.from(customSidebarSrc, "utf8");
   const sidebarFileName = "sidebar-codex.js";
+
+  const customChatWidthSrc = fs.readFileSync(customChatWidthPath, "utf8");
+  const patchedChatWidthBuf = Buffer.from(customChatWidthSrc, "utf8");
+  const chatWidthFileName = "chat-width.js";
 
   const desktopFiles = header?.files?.out?.files?.main?.files;
   const preloadFiles = header?.files?.out?.files?.preload?.files;
@@ -892,6 +898,13 @@ function main() {
   };
   currentOffset += patchedSidebarBuf.length;
 
+  assetsMap[chatWidthFileName] = {
+    size: patchedChatWidthBuf.length,
+    offset: String(currentOffset),
+    integrity: computeIntegrity(patchedChatWidthBuf),
+  };
+  currentOffset += patchedChatWidthBuf.length;
+
   for (const [map, name, buffer] of voiceFiles) {
     map[name] = { size: buffer.length, offset: String(currentOffset), integrity: computeIntegrity(buffer) };
     currentOffset += buffer.length;
@@ -918,6 +931,7 @@ function main() {
     patchedRouteBuf,
     patchedPanelBuf,
     patchedSidebarBuf,
+    patchedChatWidthBuf,
     ...voiceFiles.map(([, , buffer]) => buffer),
   ]);
 

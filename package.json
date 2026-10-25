@@ -8,7 +8,7 @@
     "opencode-desktop-mod": "./apply-mod.mjs"
   },
   "scripts": {
-    "test": "node cx-sidebar.check.mjs && node voice.check.mjs",
+    "test": "node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs",
     "apply": "node apply-mod.mjs",
     "restore": "node apply-mod.mjs --restore"
   },
