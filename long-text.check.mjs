@@ -33,15 +33,24 @@ const before = JSON.stringify(serialized);
 const result = prepareLongText(serialized, { text: originalText, id: "msg_123" });
 assert.equal(JSON.stringify(serialized), before, "Never mutate original prompt or references");
 assert.equal(result.files.length, 3);
-assert.equal(result.files.at(-1).name, "message-msg_123.txt");
+assert.equal(result.files.at(-1).name, "pasted-text.txt");
 assert.equal(Buffer.from(result.files.at(-1).uri.split(",")[1], "base64").toString("utf8"), originalText);
 assert.ok(result.text.endsWith("\n保留评审评论与路径上下文"));
-assert.ok(result.displayText.length < 300);
+assert.equal(result.displayText, "@file @explore @test");
 assert.equal(result.comments, serialized.comments);
 assert.equal(result.attachments, serialized.attachments);
 for (const item of [...result.files, ...result.agents, ...result.skills].filter(item => item.mention)) {
   assert.equal(result.displayText.slice(item.mention.start, item.mention.end), item.mention.text);
 }
+
+// Plain long text without mentions must produce empty displayText to prevent awkward synthetic text bubbles
+const plainSerialized = { text: originalText, displayText: originalText, files: [] };
+const plainResult = prepareLongText(plainSerialized, { text: originalText });
+assert.equal(plainResult.displayText, "");
+assert.equal(plainResult.text, "");
+assert.equal(plainResult.files.length, 1);
+assert.equal(plainResult.files[0].name, "pasted-text.txt");
+
 assert.deepEqual(prepareLongText(serialized, { text: originalText, id: "msg_123" }), result, "Retries must use the same filename and payload");
 assert.equal(prepareLongText({ ...serialized, text: "unexpected serialized shape" }, { text: originalText }).text, "unexpected serialized shape");
 

@@ -18,23 +18,24 @@ export function textDataUri(text) {
 
 export function prepareLongText(serialized, prompt) {
   if (!shouldAttachText(prompt?.text) || !serialized.text?.startsWith(prompt.text)) return serialized;
-  const id = String(prompt.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, "").slice(-48) || "text";
-  const name = `message-${id}.txt`;
-  let displayText = `长文本已转为附件：${name}（${prompt.text.length.toLocaleString("zh-CN")} 字符）。请阅读附件中的完整内容并按其中的请求处理。`;
-  // Keep structured references valid after replacing the original visible text.
+  const name = "pasted-text.txt";
+  let displayText = "";
+  // Keep structured references valid if mentions are present
   const remap = (items = []) => items.map(item => {
     if (!item.mention) return item;
     const label = item.mention.text ?? prompt.text.slice(item.mention.start, item.mention.end);
-    const start = displayText.length + 1;
-    displayText += ` ${label}`;
+    const start = displayText.length === 0 ? 0 : displayText.length + 1;
+    displayText = displayText.length === 0 ? label : `${displayText} ${label}`;
     return { ...item, mention: { ...item.mention, start, end: start + label.length, text: label } };
   });
   const files = remap(serialized.files);
   const agents = remap(serialized.agents);
   const skills = remap(serialized.skills);
+  const trailingText = serialized.text.slice(prompt.text.length).trim();
+  const text = [displayText, trailingText].filter(Boolean).join("\n");
   return {
     ...serialized,
-    text: displayText + serialized.text.slice(prompt.text.length),
+    text,
     displayText,
     files: [...files, { uri: textDataUri(prompt.text), mime: "text/plain", name }],
     agents,
