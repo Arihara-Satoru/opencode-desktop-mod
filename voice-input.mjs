@@ -176,7 +176,8 @@ const STYLE = `
 dialog.oc-voice-dialog {
   position: fixed !important;
   top: 50% !important;
-  transform: translateY(-50%) !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
   margin: 0 !important;
   inset: auto !important;
   box-sizing: border-box !important;
@@ -194,12 +195,34 @@ dialog.oc-voice-dialog {
   display: flex !important;
   flex-direction: column !important;
   z-index: 10000 !important;
+  pointer-events: auto !important;
+  user-select: auto !important;
   animation: oc-fade-in 0.18s ease-out !important;
 }
 dialog.oc-voice-dialog::backdrop {
   background: rgba(0, 0, 0, 0.45) !important;
   backdrop-filter: blur(6px) !important;
   -webkit-backdrop-filter: blur(6px) !important;
+}
+dialog.oc-voice-dialog,
+dialog.oc-voice-dialog * {
+  box-sizing: border-box !important;
+}
+dialog.oc-voice-dialog button,
+dialog.oc-voice-dialog input,
+dialog.oc-voice-dialog label,
+.oc-voice-btn,
+.oc-voice-modal-close,
+.oc-voice-tab {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+dialog.oc-voice-dialog input[type="text"],
+dialog.oc-voice-dialog input[type="password"],
+dialog.oc-voice-dialog input[type="url"],
+dialog.oc-voice-dialog textarea {
+  pointer-events: auto !important;
+  cursor: text !important;
 }
 @keyframes oc-fade-in {
   from { opacity: 0; }
@@ -521,9 +544,20 @@ export function createSpectrumVisualizer(container) {
 }
 
 export function positionDialog(dialog, anchor) {
-  dialog.setAttribute("data-popper-positioner", "");
+  // If native view hiding is supported and active, center on the full window
+  const isNativeHidden = typeof window !== "undefined" && typeof window.__oc_set_dialog_active === "function";
+  if (isNativeHidden) {
+    dialog.style.setProperty("left", "50%", "important");
+    dialog.style.setProperty("top", "50%", "important");
+    dialog.style.setProperty("transform", "translate(-50%, -50%)", "important");
+    dialog.style.setProperty("right", "auto", "important");
+    dialog.style.setProperty("bottom", "auto", "important");
+    dialog.style.setProperty("margin", "0", "important");
+    dialog.style.setProperty("width", "min(480px, calc(100vw - 32px))", "important");
+    return;
+  }
 
-  // Detect whether a side panel (preview, review, browser tab, or diff) is open on the right
+  // Fallback: If native view cannot be hidden, avoid right side panel overlap
   const sidePanel = document.querySelector('[data-slot="session-side-region"]') ||
                     document.querySelector('[data-slot="session-side-panel-presence"]') ||
                     document.querySelector('[data-slot="session-side-panel-content"]');
@@ -719,16 +753,25 @@ async function settings(bridge, anchor) {
   dialog.append(header, body, footer);
 
   document.body.appendChild(dialog);
+  window.__oc_set_dialog_active?.(true);
   positionDialog(dialog, anchor);
   const onResize = () => positionDialog(dialog, anchor);
   window.addEventListener("resize", onResize);
 
   // Click outside (on backdrop) to close
   dialog.addEventListener("click", (e) => {
-    if (e.target === dialog) dialog.close();
+    const rect = dialog.getBoundingClientRect();
+    const isInDialog = (
+      rect.top <= e.clientY && e.clientY <= rect.top + rect.height &&
+      rect.left <= e.clientX && e.clientX <= rect.left + rect.width
+    );
+    if (!isInDialog) {
+      dialog.close();
+    }
   });
 
   dialog.addEventListener("close", () => {
+    window.__oc_set_dialog_active?.(false);
     window.removeEventListener("resize", onResize);
     dialog.remove();
     if (anchor?.isConnected) anchor.focus();
@@ -770,11 +813,25 @@ function showResult(text) {
   footer.append(closeBtn, copyBtn);
   dialog.append(header, body, footer);
   document.body.appendChild(dialog);
+  window.__oc_set_dialog_active?.(true);
   positionDialog(dialog);
   const onResize = () => positionDialog(dialog);
   window.addEventListener("resize", onResize);
 
+  // Click outside (on backdrop) to close
+  dialog.addEventListener("click", (e) => {
+    const rect = dialog.getBoundingClientRect();
+    const isInDialog = (
+      rect.top <= e.clientY && e.clientY <= rect.top + rect.height &&
+      rect.left <= e.clientX && e.clientX <= rect.left + rect.width
+    );
+    if (!isInDialog) {
+      dialog.close();
+    }
+  });
+
   dialog.addEventListener("close", () => {
+    window.__oc_set_dialog_active?.(false);
     window.removeEventListener("resize", onResize);
     dialog.remove();
   }, { once: true });

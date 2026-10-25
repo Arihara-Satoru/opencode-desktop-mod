@@ -461,6 +461,22 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
     console.warn("[patch] 警告：未能匹配垂直标签栏挂钩，跳过 Codex 侧边栏注入。");
   }
 
+  // 5. Connect modal dialog activity to embed/webview visibility so the native layer is hidden when a modal is open
+  const fleMatch = out.match(
+    /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\{bridge:([a-zA-Z0-9_$]+)\.extensions,zoom:([^,]+),dialog:\(\)=>!!([a-zA-Z0-9_$]+)\.active\}\)/
+  );
+  if (fleMatch) {
+    const fnStart = out.lastIndexOf("function ", fleMatch.index);
+    const fnHeader = out.slice(fnStart, fleMatch.index);
+    const sigMatch = fnHeader.match(/\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=([a-zA-Z0-9_$]+)\(\)/);
+    const sigFn = sigMatch ? sigMatch[1] : (matchedZe || "S");
+    const replacement = `[__oc_mod_dlg,__oc_set_mod_dlg]=${sigFn}(!1),__oc_reg_mod_dlg=(window.__oc_set_dialog_active=__oc_set_mod_dlg),${fleMatch[1]}=${fleMatch[2]}({bridge:${fleMatch[3]}.extensions,zoom:${fleMatch[4]},dialog:()=>!!${fleMatch[5]}.active||__oc_mod_dlg()})`;
+    out = out.slice(0, fleMatch.index) + replacement + out.slice(fleMatch.index + fleMatch[0].length);
+    console.log("[patch] 成功挂钩原生视图遮罩联动 (WebContentsView Modal Bridge)。");
+  } else {
+    console.warn("[patch] 警告：未能匹配原生视图遮罩联动挂钩。");
+  }
+
   return out;
 }
 

@@ -208,7 +208,7 @@ assert.ok(formSelectorMatch, "FORM selector must exist in voice-input.mjs");
 const formSelector = formSelectorMatch[1];
 assert.equal(formSelector, 'form[data-component="composer"]', "Must match all composer forms without being restricted to session-composer-dock");
 
-// Test dialog positioning with and without side panels (e.g. review / browser webview)
+// Test dialog positioning with and without native view hook
 {
   const dialog = {
     attributes: {},
@@ -239,28 +239,22 @@ assert.equal(formSelector, 'form[data-component="composer"]', "Must match all co
   };
 
   const { positionDialog } = await import("./voice-input.mjs");
-  positionDialog(dialog, null);
 
-  assert.equal(dialog.attributes["data-popper-positioner"], "", "Dialog must declare popper-positioner to trigger embed freeze");
+  // Case 1: Fallback positioning (when __oc_set_dialog_active is not yet mounted)
+  positionDialog(dialog, null);
+  assert.equal(dialog.attributes["data-popper-positioner"], undefined, "Dialog must NEVER declare popper-positioner (which causes pointer-events: none)");
   const left = parseFloat(dialog.styles.left);
   const width = parseFloat(dialog.styles.width);
   assert.ok(left >= 16, "Left boundary must respect margin");
   assert.ok(left + width <= 1100, `Dialog (${left} + ${width} = ${left + width}) must not overlap side panel at 1100px`);
   assert.equal(Math.round(left + width / 2), 650, "Dialog must be centered inside chat panel (250 + 800/2 = 650)");
 
-  // Test full-screen scenario when no side panel is open
-  globalThis.document = {
-    querySelector: (sel) => {
-      if (sel === '[data-slot="session-chat-panel"]') {
-        return { getBoundingClientRect: () => ({ left: 460, width: 1000 }) };
-      }
-      return null;
-    }
-  };
+  // Case 2: Standard positioning (when __oc_set_dialog_active hides the native view)
+  let activeState = null;
+  globalThis.window.__oc_set_dialog_active = (active) => { activeState = active; };
   positionDialog(dialog, null);
-  const fullLeft = parseFloat(dialog.styles.left);
-  const fullWidth = parseFloat(dialog.styles.width);
-  assert.equal(Math.round(fullLeft + fullWidth / 2), 960, "Dialog must center at chat column center (460 + 500 = 960)");
+  assert.equal(dialog.styles.left, "50%", "When native view is hidden under backdrop, dialog must center at 50% left");
+  assert.equal(dialog.styles.top, "50%", "When native view is hidden under backdrop, dialog must center at 50% top");
 
   // Restore globals
   globalThis.window = originalWindow;
