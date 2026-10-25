@@ -208,6 +208,65 @@ assert.ok(formSelectorMatch, "FORM selector must exist in voice-input.mjs");
 const formSelector = formSelectorMatch[1];
 assert.equal(formSelector, 'form[data-component="composer"]', "Must match all composer forms without being restricted to session-composer-dock");
 
+// Test dialog positioning with and without side panels (e.g. review / browser webview)
+{
+  const dialog = {
+    attributes: {},
+    styles: {},
+    setAttribute(k, v) { this.attributes[k] = v; },
+    style: {
+      setProperty(k, v) { dialog.styles[k] = v; }
+    }
+  };
+
+  // Mock DOM environment for positionDialog test
+  const originalWindow = globalThis.window;
+  const originalDoc = globalThis.document;
+
+  globalThis.window = { innerWidth: 1920, innerHeight: 1080 };
+  globalThis.document = {
+    querySelector: (sel) => {
+      if (sel === '[data-slot="session-side-region"]') {
+        // Mock open right-side panel starting at x=1100px, width=820px
+        return { getBoundingClientRect: () => ({ left: 1100, width: 820 }) };
+      }
+      if (sel === '[data-slot="session-chat-panel"]') {
+        // Mock chat panel occupying x=250px to x=1050px (width 800px)
+        return { getBoundingClientRect: () => ({ left: 250, width: 800 }) };
+      }
+      return null;
+    }
+  };
+
+  const { positionDialog } = await import("./voice-input.mjs");
+  positionDialog(dialog, null);
+
+  assert.equal(dialog.attributes["data-popper-positioner"], "", "Dialog must declare popper-positioner to trigger embed freeze");
+  const left = parseFloat(dialog.styles.left);
+  const width = parseFloat(dialog.styles.width);
+  assert.ok(left >= 16, "Left boundary must respect margin");
+  assert.ok(left + width <= 1100, `Dialog (${left} + ${width} = ${left + width}) must not overlap side panel at 1100px`);
+  assert.equal(Math.round(left + width / 2), 650, "Dialog must be centered inside chat panel (250 + 800/2 = 650)");
+
+  // Test full-screen scenario when no side panel is open
+  globalThis.document = {
+    querySelector: (sel) => {
+      if (sel === '[data-slot="session-chat-panel"]') {
+        return { getBoundingClientRect: () => ({ left: 460, width: 1000 }) };
+      }
+      return null;
+    }
+  };
+  positionDialog(dialog, null);
+  const fullLeft = parseFloat(dialog.styles.left);
+  const fullWidth = parseFloat(dialog.styles.width);
+  assert.equal(Math.round(fullLeft + fullWidth / 2), 960, "Dialog must center at chat column center (460 + 500 = 960)");
+
+  // Restore globals
+  globalThis.window = originalWindow;
+  globalThis.document = originalDoc;
+}
+
 // Optional full packaging test against a COPY of an installed clean ASAR.
 if (process.env.OPENCODE_TEST_ASAR) {
   const parent = process.platform === "win32" ? path.join(os.homedir(), "AppData/Local/Temp/opencode") : os.tmpdir();

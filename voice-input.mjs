@@ -172,12 +172,13 @@ const STYLE = `
   border-color: var(--v2-border-border-strong, rgba(120, 120, 128, 0.35));
 }
 
-/* --- Modern Settings Modal Dialog (Always Viewport Centered) --- */
+/* --- Modern Settings Modal Dialog --- */
 dialog.oc-voice-dialog {
   position: fixed !important;
-  inset: 0 !important;
-  margin: auto !important;
-  transform: none !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  margin: 0 !important;
+  inset: auto !important;
   box-sizing: border-box !important;
   width: min(480px, calc(100vw - 32px)) !important;
   height: fit-content !important;
@@ -519,6 +520,51 @@ export function createSpectrumVisualizer(container) {
   return { setTheme, startLive, startWave, stop };
 }
 
+export function positionDialog(dialog, anchor) {
+  dialog.setAttribute("data-popper-positioner", "");
+
+  // Detect whether a side panel (preview, review, browser tab, or diff) is open on the right
+  const sidePanel = document.querySelector('[data-slot="session-side-region"]') ||
+                    document.querySelector('[data-slot="session-side-panel-presence"]') ||
+                    document.querySelector('[data-slot="session-side-panel-content"]');
+
+  let rightBoundary = window.innerWidth;
+  if (sidePanel) {
+    const sRect = sidePanel.getBoundingClientRect();
+    if (sRect.width > 60 && sRect.left > 200) {
+      rightBoundary = sRect.left;
+    }
+  }
+
+  // Find center of the active chat / composer column
+  const composer = anchor?.closest('form[data-component="composer"]') || document.querySelector('form[data-component="composer"]');
+  const chatPanel = document.querySelector('[data-slot="session-chat-panel"]') ||
+                    document.querySelector('[data-component="session-composer-dock"]') ||
+                    composer;
+
+  let centerX;
+  if (chatPanel) {
+    const cRect = chatPanel.getBoundingClientRect();
+    centerX = cRect.left + cRect.width / 2;
+  } else if (composer) {
+    const compRect = composer.getBoundingClientRect();
+    centerX = compRect.left + compRect.width / 2;
+  } else {
+    centerX = rightBoundary / 2;
+  }
+
+  const dialogWidth = Math.min(480, Math.max(300, rightBoundary - 32));
+  const left = Math.max(16, Math.min(rightBoundary - dialogWidth - 16, centerX - dialogWidth / 2));
+
+  dialog.style.setProperty("left", `${Math.round(left)}px`, "important");
+  dialog.style.setProperty("top", "50%", "important");
+  dialog.style.setProperty("transform", "translateY(-50%)", "important");
+  dialog.style.setProperty("right", "auto", "important");
+  dialog.style.setProperty("bottom", "auto", "important");
+  dialog.style.setProperty("margin", "0", "important");
+  dialog.style.setProperty("width", `${Math.round(dialogWidth)}px`, "important");
+}
+
 async function settings(bridge, anchor) {
   // Always clean up any existing dialogs to guarantee a fresh, responsive opening
   document.querySelectorAll(".oc-voice-dialog").forEach(d => {
@@ -673,12 +719,17 @@ async function settings(bridge, anchor) {
   dialog.append(header, body, footer);
 
   document.body.appendChild(dialog);
+  positionDialog(dialog, anchor);
+  const onResize = () => positionDialog(dialog, anchor);
+  window.addEventListener("resize", onResize);
+
   // Click outside (on backdrop) to close
   dialog.addEventListener("click", (e) => {
     if (e.target === dialog) dialog.close();
   });
 
   dialog.addEventListener("close", () => {
+    window.removeEventListener("resize", onResize);
     dialog.remove();
     if (anchor?.isConnected) anchor.focus();
   }, { once: true });
@@ -719,7 +770,14 @@ function showResult(text) {
   footer.append(closeBtn, copyBtn);
   dialog.append(header, body, footer);
   document.body.appendChild(dialog);
-  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  positionDialog(dialog);
+  const onResize = () => positionDialog(dialog);
+  window.addEventListener("resize", onResize);
+
+  dialog.addEventListener("close", () => {
+    window.removeEventListener("resize", onResize);
+    dialog.remove();
+  }, { once: true });
   dialog.showModal();
 }
 
