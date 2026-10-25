@@ -25,6 +25,8 @@
  * 5. Voice input beside the main composer send button (语音输入)
  *    - Explicit recording/upload, configurable OpenAI-compatible transcription service
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
+ * 6. Long text attachments and collapsible user messages (长文本附件与显示更多)
+ *    - Native prompt serialization, lossless UTF-8 attachment, 12-line preview
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
@@ -39,6 +41,7 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
+import { patchLongTextComposer } from "./long-text-patch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
@@ -185,7 +188,8 @@ function isAsarPatched(header, payload) {
       mainBuf.includes(Buffer.from("window.__oc_btw_slash")) ||
       mainBuf.includes(Buffer.from("/btw 随时问答")) ||
       mainBuf.includes(Buffer.from("sidebar-codex.js")) ||
-      mainBuf.includes(Buffer.from("chat-width.js"))
+      mainBuf.includes(Buffer.from("chat-width.js")) ||
+      mainBuf.includes(Buffer.from("long-text.mjs"))
     );
   } catch {
     return false;
@@ -845,7 +849,7 @@ function main() {
     `import { t as TextShimmer } from "./${shimmerFileName}"`
   );
 
-  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
+  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc, origMainSrc, symbols), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
@@ -856,6 +860,20 @@ function main() {
   const customChatWidthSrc = fs.readFileSync(customChatWidthPath, "utf8");
   const patchedChatWidthBuf = Buffer.from(customChatWidthSrc, "utf8");
   const chatWidthFileName = "chat-width.js";
+
+  // Locate the native composer by its prompt contract, not a versioned chunk name.
+  const composerFiles = Object.keys(assetsMap).filter(name => {
+    if (!name.endsWith(".js")) return false;
+    const source = readFileFromAsar(payload, assetsMap[name]).toString("utf8");
+    return source.includes(".data.session.prompt(") && source.includes("sessionDirectory:") && source.includes("images:");
+  });
+  if (composerFiles.length !== 1) throw new Error(`无法唯一定位原生输入模块（匹配 ${composerFiles.length} 处），未写入补丁。`);
+  const composerFileName = composerFiles[0];
+  const longTextFiles = [
+    [assetsMap, "long-text.mjs", fs.readFileSync(path.join(__dirname, "long-text.mjs"))],
+    [assetsMap, composerFileName, Buffer.from(patchLongTextComposer(readFileFromAsar(payload, assetsMap[composerFileName]).toString("utf8")))],
+  ];
+  console.log(`[patch] 长文本附件与折叠模块: ${composerFileName}`);
 
   const desktopFiles = header?.files?.out?.files?.main?.files;
   const preloadFiles = header?.files?.out?.files?.preload?.files;
@@ -905,7 +923,7 @@ function main() {
   };
   currentOffset += patchedChatWidthBuf.length;
 
-  for (const [map, name, buffer] of voiceFiles) {
+  for (const [map, name, buffer] of [...voiceFiles, ...longTextFiles]) {
     map[name] = { size: buffer.length, offset: String(currentOffset), integrity: computeIntegrity(buffer) };
     currentOffset += buffer.length;
   }
@@ -933,6 +951,7 @@ function main() {
     patchedSidebarBuf,
     patchedChatWidthBuf,
     ...voiceFiles.map(([, , buffer]) => buffer),
+    ...longTextFiles.map(([, , buffer]) => buffer),
   ]);
 
   fs.writeFileSync(asarPath, finalAsarBuf);
