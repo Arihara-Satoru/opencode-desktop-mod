@@ -2,8 +2,8 @@ import { createRecorder } from "./voice-recorder.mjs";
 import { validateConfig, VOICE_PRESETS } from "./voice-shared.mjs";
 import { toWav } from "./voice-audio.mjs";
 
-// Matches the host's composer slots instead of obfuscated Solid symbols.
-const FORM = '[data-component="session-composer-dock"] [data-component="composer"]';
+// Matches both active session dock and new-session (draft) view.
+const FORM = 'form[data-component="composer"]';
 const EDITOR = '[data-component="composer-editor"]';
 const STYLE = `
 /* --- Microphone Button in Composer --- */

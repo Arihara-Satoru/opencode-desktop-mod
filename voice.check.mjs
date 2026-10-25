@@ -192,6 +192,13 @@ assert.match(patched, /__oc_allow_voice_media\(e,n,i,r\)/);
 new vm.Script(patched.replace(/^import[^\n]+\n/, ""));
 assert.throws(() => patchVoiceDesktopMain("unsupported version"));
 
+// Verify the DOM selector matches both new session (draft) and active session dock.
+const voiceInputSrc = fs.readFileSync(new URL("./voice-input.mjs", import.meta.url), "utf8");
+const formSelectorMatch = voiceInputSrc.match(/const FORM = '([^']+)';/);
+assert.ok(formSelectorMatch, "FORM selector must exist in voice-input.mjs");
+const formSelector = formSelectorMatch[1];
+assert.equal(formSelector, 'form[data-component="composer"]', "Must match all composer forms without being restricted to session-composer-dock");
+
 // Optional full packaging test against a COPY of an installed clean ASAR.
 if (process.env.OPENCODE_TEST_ASAR) {
   const parent = process.platform === "win32" ? path.join(os.homedir(), "AppData/Local/Temp/opencode") : os.tmpdir();
