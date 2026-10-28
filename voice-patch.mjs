@@ -1,9 +1,9 @@
 export function patchVoiceDesktopMain(source) {
-  const request = /([\w$]+)\.webContents\.session\.setPermissionRequestHandler\(\(([\w$]+),([\w$]+),([\w$]+),([\w$]+)\)=>\{([\w$]+)\(([\w$]+)\.has\(([\w$]+)\)&&([\w$]+)\(([\w$]+)\.requestingUrl\)&&([\w$]+)\.id===([\w$]+)\)\}\)/g;
+  const request = /([\w$]+)\.webContents\.session\.setPermissionRequestHandler\(\(([\w$]+),([\w$]+),([\w$]+),([\w$]+)\)=>\{([\s\S]*?)([\w$]+)\(([\w$]+)\.has\(\3\)&&([\w$]+)\(\5\.requestingUrl\)&&\2\.id===([\w$]+)\)\}\)/g;
   let count = 0;
-  let result = source.replace(request, (all, win, contents, permission, callback, details) => {
+  let result = source.replace(request, (all, win, contents, permission, callback, details, prefix, hasFn, setVar, urlFn, winId) => {
     count++;
-    return all.replace(`{${callback}(`, `{if(__oc_allow_voice_media(${contents},${permission},${details}))return ${callback}(!0);${callback}(`);
+    return `${win}.webContents.session.setPermissionRequestHandler((${contents},${permission},${callback},${details})=>{if(__oc_allow_voice_media(${contents},${permission},${details}))return ${callback}(!0);${prefix}${hasFn}(${setVar}.has(${permission})&&${urlFn}(${details}.requestingUrl)&&${contents}.id===${winId})})`;
   });
   const check = /([\w$]+)\.webContents\.session\.setPermissionCheckHandler\(\(([\w$]+),([\w$]+),([\w$]+),([\w$]+)\)=>([^;]+?)\)\}/g;
   let checkCount = 0;

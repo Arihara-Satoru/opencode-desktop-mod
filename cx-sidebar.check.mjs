@@ -155,7 +155,7 @@ if (process.argv[2]) {
   const patchMain = vm.runInNewContext(patcher.slice(patcher.indexOf("function patchMainBundle("), patcher.indexOf("function patchSessionRouteBundle(")) + ";patchMainBundle", { console });
   const patched = patchMain(main, panelName, read(panelName));
   const lifecycleCapture = patched.match(/^const __oc_cx_onCleanup=[\w$]+;/)?.[0] || "";
-  const hook = patched.match(/Vae\(\),((\(\(\)=>\{var )[\s\S]*?return [\w$]+\([\w$]+,\[host,origWrap\]\),[\w$]+;\}\)\(\))/)[1];
+  const hook = patched.match(/[\w$]+\(\),((\(\(\)=>\{var )[\s\S]*?return [\w$]+\([\w$]+,\[host,origWrap\]\),[\w$]+;\}\)\(\))/)[1];
   const solid = vm.runInNewContext(main.slice(main.indexOf("var t={context:"), main.indexOf("function Fe()")) + ";({root:x,signal:S,memo:E,component:F,cleanup:A})");
   solid.root((disposeRoot) => {
     const [current, select] = solid.signal(undefined);

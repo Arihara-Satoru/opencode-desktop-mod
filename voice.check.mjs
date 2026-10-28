@@ -199,6 +199,13 @@ const patched = patchVoiceDesktopMain(fixture);
 assert.match(patched, /__oc_allow_voice_media\(e,n,i\)/);
 assert.match(patched, /__oc_allow_voice_media\(e,n,i,r\)/);
 new vm.Script(patched.replace(/^import[^\n]+\n/, ""));
+
+const fixtureV220 = 'function Vt(e){let t=e.webContents.id;e.webContents.session.setPermissionRequestHandler((e,n,r,i)=>{if(n===`media`){r(e.id===t&&V(i.requestingUrl)&&i.isMainFrame&&`mediaTypes`in i&&!!i.mediaTypes?.length&&i.mediaTypes.every(e=>e===`audio`));return}r(Bt.has(n)&&V(i.requestingUrl)&&e.id===t)}),e.webContents.session.setPermissionCheckHandler((e,n,r,i)=>n===`media`?e?.id===t&&V(i.requestingUrl)&&i.isMainFrame&&i.mediaType===`audio`:!Bt.has(n)||e&&e.id!==t?!1:V(i.requestingUrl)||V(r))}';
+const patchedV220 = patchVoiceDesktopMain(fixtureV220);
+assert.match(patchedV220, /__oc_allow_voice_media\(e,n,i\)/);
+assert.match(patchedV220, /__oc_allow_voice_media\(e,n,i,r\)/);
+new vm.Script(patchedV220.replace(/^import[^\n]+\n/, ""));
+
 assert.throws(() => patchVoiceDesktopMain("unsupported version"));
 
 // Verify the DOM selector matches both new session (draft) and active session dock.

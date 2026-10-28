@@ -425,38 +425,63 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   }
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
-  const vTabsRegex = /([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),(\{orientation:[`'"]vertical[`'"],[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\})\)\),\2\}\)\(\)/;
-  const vMatch = out.match(vTabsRegex);
+  const propPattern = /\{orientation:[`'"]vertical[`'"],tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
+  const propMatch = out.match(propPattern);
   let vTabsInjected = false;
-  if (vMatch) {
-    const [full, prefixFn, cVar, hVar, insFn, crComp, i5Var, props] = vMatch;
-    const tabsVar = props.match(/tabs:([a-zA-Z0-9_$]+)/)?.[1] || "_";
-    const currentTabFn = props.match(/get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\}/)?.[1] || "D";
-    const tabsStoreVar = props.match(/onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{([a-zA-Z0-9_$]+)\.select/)?.[1] || "d";
-    const tabKeyFn = props.match(/findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)===\1\(/)?.[1] || "AR";
+  if (propMatch) {
+    const prefixSlice = out.slice(Math.max(0, propMatch.index - 500), propMatch.index);
+    const startMatch = [...prefixSlice.matchAll(/([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,/g)].pop();
+    if (startMatch) {
+      const fullStart = propMatch.index - prefixSlice.length + startMatch.index;
+      const afterSlice = out.slice(propMatch.index, propMatch.index + 800);
+      const endMatch = afterSlice.match(new RegExp(`\\),${startMatch[2]}\\}\\)\\(\\)`));
+      if (endMatch) {
+        const fullEnd = propMatch.index + endMatch.index + endMatch[0].length;
+        const fullBlock = out.slice(fullStart, fullEnd);
 
-    const settingsHookMatch = src.match(/var\{use:([a-zA-Z0-9_$]+),provider:([a-zA-Z0-9_$]+)\}=Yi\(\{name:[`'"]SettingsSurface[`'"]/);
-    const settingsHook = settingsHookMatch ? settingsHookMatch[1] : "RU";
-    const settingsProvider = settingsHookMatch ? settingsHookMatch[2] : "zU";
+        const prefixFn = startMatch[1];
+        const cVar = startMatch[2];
+        const hVar = startMatch[3];
+        const insFn = startMatch[4];
+        const origExpr = fullBlock.slice(startMatch[0].length, fullBlock.length - endMatch[0].length);
+        const crComp = origExpr.match(/^([a-zA-Z0-9_$]+)\(/)?.[1] || "F";
 
-    const replacement = [
-      `${prefixFn}(),(()=>{`,
-      `var ${cVar}=${hVar}(),orig=${crComp}(${i5Var},${props}),host=document.createElement('div'),origWrap=document.createElement('div');`,
-      "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
-      "origWrap.style.display='none';",
-      `${insFn}(origWrap,orig);`,
-      `var deps={servers:s,tabsStore:${tabsStoreVar},tabs:${tabsVar},current:()=>${currentTabFn}(),tabKey:${tabKeyFn},serverKey:Q.key,settings:(()=>{try{return ${settingsHook}()}catch(e){try{return ${settingsProvider}()}catch(e2){return null}}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};`,
-      // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
-      "var cxDisposed=!1,cxDispose;",
-      "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
-      `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
-      "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
-      `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
-      "})()",
-    ].join("");
+        const props = propMatch[0];
+        const tabsVar = propMatch[1];
+        const currentTabFn = propMatch[2];
+        const tabsStoreVar = props.match(/onNavigate:\s*\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\s*=>\s*\{([a-zA-Z0-9_$]+)\.select/)?.[1] || "d";
+        const tabKeyFn = props.match(/findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)===\1\(/)?.[1] || "AR";
 
-    out = out.slice(0, vMatch.index) + replacement + out.slice(vMatch.index + full.length);
-    vTabsInjected = true;
+        const sliceBefore = out.slice(Math.max(0, fullStart - 12000), fullStart);
+        const srvListMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.servers\.list\(\)/);
+        const serversVar = srvListMatch ? srvListMatch[1] : "s";
+        const srvKeyMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.key\([a-zA-Z0-9_$]+\)/);
+        const serverKeyObj = srvKeyMatch ? srvKeyMatch[1] : "Q";
+
+        const settingsHookMatch = src.match(/var\{use:([a-zA-Z0-9_$]+),provider:([a-zA-Z0-9_$]+)\}=([a-zA-Z0-9_$]+)\(\{name:[`'"]SettingsSurface[`'"]/);
+        const settingsHook = settingsHookMatch ? settingsHookMatch[1] : "RU";
+        const settingsProvider = settingsHookMatch ? settingsHookMatch[2] : "zU";
+
+        const replacement = [
+          `${prefixFn}(),(()=>{`,
+          `var ${cVar}=${hVar}(),orig=${origExpr},host=document.createElement('div'),origWrap=document.createElement('div');`,
+          "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
+          "origWrap.style.display='none';",
+          `${insFn}(origWrap,orig);`,
+          `var deps={servers:${serversVar},tabsStore:${tabsStoreVar},tabs:${tabsVar},current:()=>${currentTabFn}(),tabKey:${tabKeyFn},serverKey:${serverKeyObj}.key,settings:(()=>{try{return ${settingsHook}()}catch(e){try{return ${settingsProvider}()}catch(e2){return null}}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};`,
+          // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
+          "var cxDisposed=!1,cxDispose;",
+          "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
+          `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
+          "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
+          `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
+          "})()",
+        ].join("");
+
+        out = out.slice(0, fullStart) + replacement + out.slice(fullEnd);
+        vTabsInjected = true;
+      }
+    }
   }
 
   if (vTabsInjected) {
@@ -469,14 +494,16 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
 
   // 5. Connect modal dialog activity to embed/webview visibility so the native layer is hidden when a modal is open
   const fleMatch = out.match(
-    /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\{bridge:([a-zA-Z0-9_$]+)\.extensions,zoom:([^,]+),dialog:\(\)=>!!([a-zA-Z0-9_$]+)\.active\}\)/
+    /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\{bridge:([a-zA-Z0-9_$]+)\.(?:extensions|plugins),zoom:([^,]+),dialog:\(\)=>!!([a-zA-Z0-9_$]+)\.active([^}]*)\}\)/
   );
   if (fleMatch) {
     const fnStart = out.lastIndexOf("function ", fleMatch.index);
     const fnHeader = out.slice(fnStart, fleMatch.index);
     const sigMatch = fnHeader.match(/\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=([a-zA-Z0-9_$]+)\(\)/);
     const sigFn = sigMatch ? sigMatch[1] : (matchedZe || "S");
-    const replacement = `[__oc_mod_dlg,__oc_set_mod_dlg]=${sigFn}(!1),__oc_reg_mod_dlg=(window.__oc_set_dialog_active=__oc_set_mod_dlg),${fleMatch[1]}=${fleMatch[2]}({bridge:${fleMatch[3]}.extensions,zoom:${fleMatch[4]},dialog:()=>!!${fleMatch[5]}.active||__oc_mod_dlg()})`;
+    const bridgeProp = fleMatch[0].includes(".plugins") ? "plugins" : "extensions";
+    const extraProps = fleMatch[6] || "";
+    const replacement = `[__oc_mod_dlg,__oc_set_mod_dlg]=${sigFn}(!1),__oc_reg_mod_dlg=(window.__oc_set_dialog_active=__oc_set_mod_dlg),${fleMatch[1]}=${fleMatch[2]}({bridge:${fleMatch[3]}.${bridgeProp},zoom:${fleMatch[4]},dialog:()=>!!${fleMatch[5]}.active||__oc_mod_dlg()${extraProps}})`;
     out = out.slice(0, fleMatch.index) + replacement + out.slice(fleMatch.index + fleMatch[0].length);
     console.log("[patch] 成功挂钩原生视图遮罩联动 (WebContentsView Modal Bridge)。");
   } else {
@@ -490,7 +517,7 @@ function patchSessionRouteBundle(src, origMainSrc = "", symbols = {}) {
   let out = src;
 
   // 1. Allow right side panel to be resized down to 340px instead of 480px minimum
-  out = out.replace(/var\s+([a-zA-Z0-9_$]+=)480(,[a-zA-Z0-9_$]+=800)/, "var $1340$2");
+  out = out.replace(/([a-zA-Z0-9_$]+=)480(,[a-zA-Z0-9_$]+=800)/, "$1340$2");
 
   // 2. Expose timeline controller on window.__oc_timeline_ctrl & window.__oc_current_session
   const mvMatch212 = out.match(
