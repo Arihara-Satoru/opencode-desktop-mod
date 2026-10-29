@@ -334,6 +334,51 @@ assert.match(renderer, /ResizeObserver/);
   assert.deepEqual(bridge, [true, false, true, false, true, false, true, false, true, false]);
 }
 
+// Minifier-local names change even in patch releases. Resolve the serializer
+// and its small test doubles by their contracts, not a 2.2.0 symbol snapshot.
+function loadNativeSerializer(source) {
+  const candidates = [...source.matchAll(/function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=([\w$]+)\(\2\.prompt\),/g)];
+  assert.equal(candidates.length, 1, "Find exactly one native prompt serializer");
+  const candidate = candidates[0];
+  const tail = source.slice(candidate.index).match(/,attachments:[\w$]+\}\}/);
+  assert.ok(tail, "Find the native serializer's complete result contract");
+  const body = source.slice(candidate.index, candidate.index + tail.index + tail[0].length);
+  const predicates = new Map([...source.slice(0, candidate.index).matchAll(/(?:var\s+|,)([\w$]+)=([\w$]+)=>\2\.type===[`'"](\w+)[`'"]/g)]
+    .map(match => [match[1], match[3]]));
+  const bindings = { [candidate[4]]: parts => parts };
+  const kinds = [];
+  for (const match of body.matchAll(/\.filter\(([\w$]+)\)/g)) {
+    const kind = predicates.get(match[1]);
+    assert.ok(kind, `Resolve native part predicate: ${match[1]}`);
+    kinds.push(kind);
+    bindings[match[1]] = part => part.type === kind;
+  }
+  assert.deepEqual([...new Set(kinds)].sort(), ["agent", "file", "path", "skill"]);
+  const join = body.match(/([\w$]+)\([\w$]+\.sessionDirectory,[\w$]+\.path\)/);
+  const uri = body.match(/return\{uri:[\w$]+\.url\?\?`file:\/\/\$\{([\w$]+)\([\w$]+\)\}\$\{([\w$]+)\([\w$]+\.selection\)\}`/);
+  const basename = body.match(/name:[\w$]+\.filename\?\?([\w$]+)\([\w$]+\.path\)/);
+  const describe = body.match(/\.\.\.[\w$]+\.map\(([\w$]+)\),/);
+  assert.ok(join && uri && basename && describe, "Resolve native file/attachment helpers");
+  Object.assign(bindings, {
+    [join[1]]: (directory, file) => `${directory}/${file}`,
+    [uri[1]]: value => value,
+    [uri[2]]: selection => selection ? `?start=${selection.startLine}&end=${selection.endLine}` : "",
+    [basename[1]]: value => value.split("/").at(-1),
+    [describe[1]]: file => `Attached file: \`${file.path}\``,
+  });
+  return vm.runInNewContext(`(${body})`, bindings);
+}
+
+// The old function name can now belong to a DOM cursor helper. It must not be
+// selected or executed when validating attachment content on a newer release.
+const serializerFixture = 'var ff=p=>p.type===`file`,aa=p=>p.type===`agent`,ss=p=>p.type===`skill`,pp=p=>p.type===`path`;function _i(e){throw Error("DOM cursor helper must not execute")}function renamed(e){let t=normalize(e.prompt),n=e.text,s=t.filter(ss).map(p=>({id:p.id,name:p.name,mention:{start:p.start,end:p.end,text:p.content}})),f=t.filter(ff).map(p=>{let joined=join(e.sessionDirectory,p.path);return{uri:p.url??`file://${encode(joined)}${selection(p.selection)}`,mime:p.mime??`text/plain`,name:p.filename??basename(p.path),mention:{start:p.start,end:p.end,text:p.content}}}),a=t.filter(aa).map(p=>({name:p.name,mention:{start:p.start,end:p.end,text:p.content}})),c=[],x=e.prompt.filter(pp).map(p=>({name:p.filename,mime:p.mime,path:p.path}));return{text:[...n.trim()?[n]:[],...x.map(describe),...c.map(p=>p.comment)].join(`\\n`),displayText:n,files:[...f],agents:a,skills:s,comments:c,attachments:x}}';
+const fixtureSerialized = loadNativeSerializer(serializerFixture)({ prompt: emptyCard.parts,
+  text: cardSerialized.text, context: [], images: [], sessionDirectory: "/workspace" });
+assert.equal(fixtureSerialized.files[0].uri, card.url);
+assert.equal(prepareLongText(fixtureSerialized, { text: cardSerialized.text, prompt: emptyCard.parts }).text, "");
+assert.throws(() => loadNativeSerializer("function _i(e){return e.firstChild}"), /native prompt serializer/);
+assert.throws(() => loadNativeSerializer(serializerFixture + serializerFixture), /native prompt serializer/);
+
 // Explicit optional integration against a copied archive, never the live app.
 const asarIndex = process.argv.indexOf("--asar");
 if (asarIndex >= 0) {
@@ -367,16 +412,7 @@ if (asarIndex >= 0) {
     const native = read(modules[0][1]).toString();
     assert.equal((native.match(/__oc_bind_long_text\([\w$]+,this\)/g) ?? []).length, 1);
     // Execute the official serialization routine, not just the patch anchor.
-    const start = native.indexOf("function _i(");
-    const end = native.indexOf("function vi(", start);
-    assert.ok(start >= 0 && end > start, "Find native serializer in the 2.2.0 integration fixture");
-    const serializeNative = vm.runInNewContext(native.slice(start, end) + ";_i", {
-      j: parts => parts, pi: part => part.type === "skill", di: part => part.type === "file",
-      fi: part => part.type === "agent", mi: part => part.type === "path",
-      si: (directory, file) => `${directory}/${file}`, Ye: value => value,
-      ci: () => "", Ze: value => value.split("/").at(-1), ui: () => [],
-      ti: () => "", ni: () => "", ri: () => "", ai: () => "",
-    });
+    const serializeNative = loadNativeSerializer(native);
     const nativeDraft = JSON.parse(JSON.stringify(refs.parts));
     const nativeText = nativeDraft.map(part => part.content ?? "").join("");
     const nativeResult = prepareLongText(serializeNative({ prompt: nativeDraft, text: nativeText,
