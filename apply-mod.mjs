@@ -229,9 +229,10 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   const matchedZe = fnStartMatch[3];
   const matchedG = fnStartMatch[4];
 
-  // Extract vite dependency mapping array if present in original import
+  // Vite's second argument is always a dependency array, even when empty.
+  // Omitting [] shifts import.meta.url into that slot and crashes on t.map().
   const mapDepsMatch = fnBody.match(/__vite__mapDeps\(\[([0-9,\s]+)\]\)/);
-  const mapDepsArg = mapDepsMatch ? `__vite__mapDeps([${mapDepsMatch[1]}]),` : "";
+  const mapDepsArg = mapDepsMatch ? `__vite__mapDeps([${mapDepsMatch[1]}]),` : "[],";
 
   const preloadMatch = fnBody.match(
     /([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\(\(\)=>void [a-zA-Z0-9_$]+\.preload\(\)\)\);/
@@ -297,7 +298,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
     "window.__oc_app_ext=e;",
     `let t=${matchedZe}(()=>${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url));`,
     `${matchedA}(${matchedRI}(()=>void t.preload()));`,
-    `${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url).then(m=>m.initCompanion?.(e));`,
+    `${matchedG}(()=>import(\`./${panelFileName}\`),${mapDepsArg}import.meta.url).then(m=>m.initCompanion?.(e)).catch(err=>console.error('[mod-companion] initialization failed',err));`,
     `import(\`./sidebar-codex.js\`).then(m=>{window.__oc_cx_sidebar=m}).catch(()=>{});`,
     `let n=e.layout,r=e.sessions,i=${matchedDoe}(e),a=${matchedE}(()=>!!r.current()),`,
     `mainTab={id:\`main\`,get title(){return\`/btw\`},draggable:!1,closable:\`compact\`,fallback:!0,label:()=>((()=>{var r=${matchedOoe}(),a=r.firstChild;return ${matchedH}(r,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),a),${matchedH}(a,()=>\`/btw\`),r})())};`,

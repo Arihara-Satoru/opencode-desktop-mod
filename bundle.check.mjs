@@ -20,6 +20,72 @@ assert.ok(patchedRoute.includes("window.__oc_virtual_scroll"));
 assert.ok(!patchedRoute.includes("__oc_fork"));
 assert.throws(() => resolvePanelSymbols("", "", "export{}"), /未写入补丁/);
 
+async function checkCompanionSetup(main, panelName) {
+  const start = main.indexOf("=e=>{window.__oc_app_ext=e;") + 1;
+  assert.ok(start > 0, "Find the emitted companion setup");
+  const tail = main.slice(start).match(/get id\(\)\{return`main`\}\}\)\}\}\)\}\)\}/);
+  assert.ok(tail, "Find the end of emitted companion setup");
+  const setup = main.slice(start, start + tail.index + tail[0].length);
+  const lazy = setup.match(/let t=([\w$]+)\(\(\)=>([\w$]+)\(/);
+  const preload = setup.match(/;([\w$]+)\(([\w$]+)\(\(\)=>void t\.preload\(\)\)\)/);
+  const store = setup.match(/i=([\w$]+)\(e\),a=([\w$]+)\(/);
+  const render = setup.match(/render:p=>([\w$]+)\(([\w$]+),/);
+  const registries = [...setup.matchAll(/e\.add\(([\w$]+),/g)].map(m => m[1]);
+  assert.ok(lazy && preload && store && render);
+  assert.ok(!setup.includes('import(`./' + panelName + '`),import.meta.url'), "Never omit Vite's dependency-array argument");
+  let initialized = 0, loaded = 0, rendered = 0;
+  const contributions = [];
+  const session = { id: "session-test" };
+  const layoutCalls = [];
+  const ext = {
+    sessions: { current: () => session }, t: key => key,
+    layout: { narrow: () => false, toggle: (...args) => layoutCalls.push(args), state: () => "visible" },
+    add: (registry, value) => contributions.push([registry, typeof value === "function" ? value() : value]),
+  };
+  const sandbox = {
+    window: {}, console,
+    __load: async name => {
+      loaded++;
+      assert.ok(name === `./${panelName}` || name === "./sidebar-codex.js");
+      return { initCompanion: actual => { assert.equal(actual, ext); initialized++; }, default: () => { rendered++; return "panel"; } };
+    },
+    [lazy[1]]: load => Object.assign(() => { rendered++; return "panel"; }, { preload: load }),
+    // Model Vite's actual array contract rather than accepting any second arg.
+    [lazy[2]]: (load, deps, url) => {
+      assert.ok(Array.isArray(deps), "Vite dependency list must stay in argument 2, including []");
+      assert.equal(url, "oc://renderer/assets/main.js");
+      deps.map(dep => assert.equal(typeof dep, "string"));
+      return load();
+    },
+    [preload[1]]: () => {}, [preload[2]]: callback => callback,
+    [store[1]]: () => ({}), [store[2]]: fn => fn,
+    [render[1]]: (component, props) => component(props),
+    [render[2]]: props => props.children,
+    __vite__mapDeps: entries => entries.map(n => `asset-${n}.js`),
+  };
+  registries.forEach(name => { sandbox[name] = name; });
+  const setupFn = vm.runInNewContext(`(${setup.replaceAll("import.meta.url", '"oc://renderer/assets/main.js"').replaceAll("import(", "__load(")})`, sandbox);
+  setupFn(ext);
+  await new Promise(setImmediate);
+  assert.equal(initialized, 1, "Initialize timeline and quote hooks exactly once");
+  assert.equal(loaded, 2, "Load companion and sidebar");
+  assert.equal(sandbox.window.__oc_app_ext, ext);
+  const command = contributions.find(([, value]) => value.id === "ask")[1];
+  const side = contributions.find(([, value]) => value.region === "side")[1];
+  assert.equal(command.enabled, true);
+  command.run("");
+  assert.equal(layoutCalls[0][0], "btw:main");
+  assert.equal(side.list({ open: [] }).length, 0);
+  assert.equal(side.list({ open: ["main"] })[0].id, "main");
+  assert.equal(side.render({ session }), "panel");
+  assert.equal(rendered, 1, "The registered side panel must render");
+}
+
+// Both dependency shapes must execute, not just pass syntax validation.
+for (const deps of ["[]", "__vite__mapDeps([1,2])"]) {
+  await checkCompanionSetup(`setup=e=>{window.__oc_app_ext=e;let t=lazy(()=>preload(()=>import(\`./panel-test.js\`),${deps},import.meta.url));cleanup(onMount(()=>void t.preload()));preload(()=>import(\`./panel-test.js\`),${deps},import.meta.url).then(m=>m.initCompanion?.(e));import(\`./sidebar-codex.js\`).then(m=>{window.__oc_cx_sidebar=m});let n=e.layout,r=e.sessions,i=store(e),a=memo(()=>!!r.current());e.add(cmd,()=>({id:\`ask\`,enabled:!n.narrow()&&a(),run:()=>n.toggle(\`btw:main\`,r.current())}));e.add(side,{region:\`side\`,list:t=>t.open.length?[{id:\`main\`}]:[],render:p=>component(suspense,{get children(){return component(t,{btw:i,get session(){return p.session},get id(){return\`main\`}})}})})}`, "panel-test.js");
+}
+
 const asarIndex = process.argv.indexOf("--asar");
 if (asarIndex >= 0) {
   const original = fs.readFileSync(process.argv[asarIndex + 1]);
@@ -82,6 +148,7 @@ if (asarIndex >= 0) {
     apply();
     assert.deepEqual(fs.readFileSync(target), first);
     const patched = archive(first);
+    await checkCompanionSetup(patched.read(assetsPath + mainName), panelName);
     const result = patched.read(assetsPath + routeName);
     assert.equal(result, patchRoute(route));
     assert.ok(result.includes("ui.message.forkMessage"), "Keep official fork action");
@@ -112,9 +179,9 @@ if (asarIndex >= 0) {
       }
     }
     walk(patched.header);
-    console.log(`Official ASAR integration passed: ${checked} changed scripts, imports, exports, integrity, native fork/footer, Solid runtime and idempotence.`);
+    console.log(`Official ASAR integration passed: ${checked} changed scripts, imports, exports, integrity, native fork/footer, Solid runtime, companion setup/render and idempotence.`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-console.log("Bundle checks passed: native actions preserved and unknown symbols rejected.");
+console.log("Bundle checks passed: native actions preserved, unknown symbols rejected, empty/mapped Vite dependencies and companion setup/render.");
