@@ -13,19 +13,15 @@
  *    - Top header toggle button & Alt+B shortcut
  *    - Text selection floating pill ("引用到 /btw" / "⚡ 解释", or Alt+Q)
  *    - Independent model selector, context modes, persistent tabs
- * 3. Branch to New Chat (分支到新聊天) button
- *    - Placed next to copy button at assistant turn footer
- *    - Forks conversation up to current assistant turn into a fresh session
- *    - Auto-numbers branch session titles: 原标题 (分支), 原标题 (分支 2)...
- * 4. Codex-Style Sidebar with Pinning (Codex 风格侧边栏与项目/会话双置顶)
+ * 3. Codex-Style Sidebar with Pinning (Codex 风格侧边栏与项目/会话双置顶)
  *    - Projects accordion grouping with clean session hierarchy (no letter avatars)
  *    - Hover card for projects: pin, chats count, worktree path, direct edit-project trigger
  *    - Pinned section at top for pinned sessions; pinned projects hoisted to top
  *    - Context menu: pin/unpin, rename, delete chat, new chat in project, copy path
- * 5. Voice input beside the main composer send button (语音输入)
+ * 4. Voice input beside the main composer send button (语音输入)
  *    - Explicit recording/upload, configurable OpenAI-compatible transcription service
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
- * 6. Long text attachments and collapsible user messages (长文本附件与显示更多)
+ * 5. Long text attachments and collapsible user messages (长文本附件与显示更多)
  *    - Native prompt serialization, lossless UTF-8 attachment, 12-line preview
  *
  * Usage:
@@ -42,6 +38,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
+import { resolvePanelSymbols } from "./bundle-symbols.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
@@ -196,85 +193,7 @@ function isAsarPatched(header, payload) {
   }
 }
 
-function resolvePanelSymbols(origPanelSrc, origRouteSrc, origMainSrc) {
-  const panelImportMatch = origPanelSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
-  const panelImports = {};
-  if (panelImportMatch) {
-    for (const part of panelImportMatch[1].split(",")) {
-      const [orig, local] = part.trim().split(/\s+as\s+/);
-      panelImports[local || orig] = orig;
-    }
-  }
-
-  const routeImportMatch = origRouteSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
-  const routeImports = {};
-  if (routeImportMatch) {
-    for (const part of routeImportMatch[1].split(",")) {
-      const [orig, local] = part.trim().split(/\s+as\s+/);
-      routeImports[local || orig] = orig;
-    }
-  }
-
-  let forExport = "il";
-  const forMatch = origRouteSrc.match(/([a-zA-Z0-9_$]+)\s*,\s*\{get each\(\)/);
-  if (forMatch && routeImports[forMatch[1]]) {
-    forExport = routeImports[forMatch[1]];
-  }
-
-  let effectExport = "_l";
-  const effectMatch = origMainSrc.match(
-    /function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+,!1,[a-zA-Z0-9_$]+\)\)\}/
-  );
-  const exportIdx = origMainSrc.lastIndexOf("export{");
-  const exportsStr = exportIdx !== -1 ? origMainSrc.slice(exportIdx) : "";
-  if (effectMatch) {
-    const m = exportsStr.match(new RegExp(`\\b${effectMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
-    if (m) effectExport = m[1];
-  }
-
-  let cleanupExport = "Dl";
-  const cleanupMatch = origMainSrc.match(
-    /function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)\{return [a-zA-Z0-9_$]+===null\|\|\([a-zA-Z0-9_$]+\.cleanups===null\?[a-zA-Z0-9_$]+\.cleanups=\[[a-zA-Z0-9_$]+\]:[a-zA-Z0-9_$]+\.cleanups\.push\([a-zA-Z0-9_$]+\)\),[a-zA-Z0-9_$]+\}/
-  );
-  if (cleanupMatch) {
-    const m = exportsStr.match(new RegExp(`\\b${cleanupMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
-    if (m) cleanupExport = m[1];
-  }
-
-  let useExtensionExport = panelImports["p"] || "qr";
-  const useExtInternalMatch = origMainSrc.match(
-    /function\s+([a-zA-Z0-9_$]+)\(\)\{let\s+[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+\([a-zA-Z0-9_$]+\);if\(![a-zA-Z0-9_$]+\)throw Error\([`'"]useExtension must run inside an extension contribution[`'"]\)/
-  );
-  if (useExtInternalMatch) {
-    const m = exportsStr.match(new RegExp(`\\b${useExtInternalMatch[1]}\\s+as\\s+([a-zA-Z0-9_$]+)`));
-    if (m) useExtensionExport = m[1];
-  }
-
-  return {
-    onChange: panelImports["t"] || "El",
-    Tooltip: panelImports["i"] || "Pn",
-    useExtension: useExtensionExport,
-    IconButton: panelImports["r"] || "Ln",
-    createMemo: panelImports["c"] || "gl",
-    ScrollView: panelImports["g"] || "wn",
-    Show: panelImports["m"] || "sl",
-    Icon: panelImports["l"] || "hi",
-    Match: panelImports["d"] || "ol",
-    memoBool: panelImports["a"] || "Yc",
-    Button: panelImports["e"] || "An",
-    createSignal: panelImports["o"] || "bl",
-    showToast: panelImports["f"] || "pi",
-    insert: panelImports["n"] || "Jc",
-    template: panelImports["h"] || "tl",
-    Switch: panelImports["u"] || "ll",
-    createComponent: panelImports["s"] || "fl",
-    For: forExport,
-    createEffect: effectExport,
-    onCleanup: cleanupExport,
-  };
-}
-
-function patchMainBundle(src, panelFileName, origPanelSrc) {
+function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   let out = src;
 
   // 1. Widen default session-chat-panel width when right side panel is opened (600 -> 1080)
@@ -317,70 +236,61 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   const preloadMatch = fnBody.match(
     /([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\(\(\)=>void [a-zA-Z0-9_$]+\.preload\(\)\)\);/
   );
-  const matchedA = preloadMatch ? preloadMatch[1] : "A";
-  const matchedRI = preloadMatch ? preloadMatch[2] : "NI";
+  if (!preloadMatch) throw new Error("无法解析 /btw 预加载挂钩，未写入补丁。");
+  const matchedA = preloadMatch[1];
+  const matchedRI = preloadMatch[2];
 
   const storeMatch = fnBody.match(
     /let [a-zA-Z0-9_$]+=e\.layout,[a-zA-Z0-9_$]+=e\.sessions,([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(e\),([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\(\)=>!!/
   );
-  const matchedDoe = storeMatch ? storeMatch[2] : "Doe";
-  const matchedE = storeMatch ? storeMatch[4] : "E";
+  if (!storeMatch) throw new Error("无法解析 /btw 会话挂钩，未写入补丁。");
+  const matchedDoe = storeMatch[2];
+  const matchedE = storeMatch[4];
 
   const cmdMatch = fnBody.match(/e\.add\(([a-zA-Z0-9_$]+),\(\)=>\(?\{id:[`'"]ask[`'"]/);
-  const matchedCmdExt = cmdMatch ? cmdMatch[1] : "xI";
+  if (!cmdMatch) throw new Error("无法解析 /btw 命令挂钩，未写入补丁。");
+  const matchedCmdExt = cmdMatch[1];
 
   const sideMatch = fnBody.match(/e\.add\(([a-zA-Z0-9_$]+),\{id:[`'"]main[`'"],region:[`'"]side[`'"]/);
-  const matchedSideExt = sideMatch ? sideMatch[1] : "CI";
+  if (!sideMatch) throw new Error("无法解析 /btw 面板挂钩，未写入补丁。");
+  const matchedSideExt = sideMatch[1];
 
   const labelMatch = fnBody.match(
     /var [a-zA-Z0-9_$]+=([a-zA-Z0-9_$]+)\(\),[a-zA-Z0-9_$]+=[a-zA-Z0-9_$]+\.firstChild;return ([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),\{name:[`'"]bubble-5[`'"]/
   );
-  const matchedOoe = labelMatch ? labelMatch[1] : "Ooe";
-  const matchedH = labelMatch ? labelMatch[2] : "H";
-  const matchedF = labelMatch ? labelMatch[3] : "F";
-  const matchedIcon = labelMatch ? labelMatch[4] : "hP";
+  const matchedOoe = labelMatch?.[1] || fnBody.match(/label:[\w$]+=>\(\(\)=>\{var [\w$]+=([\w$]+)\(\),[\w$]+=[\w$]+\.firstChild/)?.[1];
+  if (!matchedOoe) throw new Error("无法解析 /btw 标签模板，未写入补丁。");
 
   const suspenseMatch = fnBody.match(
     /render:[a-zA-Z0-9_$]+=>[a-zA-Z0-9_$]+\(([a-zA-Z0-9_$]+),\{get children\(\)\{return/
   );
-  const matchedZeWrapper = suspenseMatch ? suspenseMatch[1] : "Ze";
+  if (!suspenseMatch) throw new Error("无法解析 /btw 渲染挂钩，未写入补丁。");
+  const matchedZeWrapper = suspenseMatch[1];
 
   const headerExtMatch = out.match(/e\.add\(([a-zA-Z0-9_$]+),\{at:[`'"]session\.header[`'"],order:/);
-  const headerExt = headerExtMatch ? headerExtMatch[1] : "OI";
-
-  let matchedTrack = "r7";
-  const s7Match = out.match(
-    /\{at:[`'"]session\.header[`'"],order:10,render:[a-zA-Z0-9_$]+=>[a-zA-Z0-9_$]+\(([a-zA-Z0-9_$]+),/
-  );
-  if (s7Match) {
-    const s7Name = s7Match[1];
-    const trackMatch = out.match(
-      new RegExp(`function\\s+${s7Name}\\([a-zA-Z0-9_$]+\\)\\{[\\s\\S]*?([a-zA-Z0-9_$]+)\\(\\(\\)=>[a-zA-Z0-9_$]+\\.session\\)`)
-    );
-    if (trackMatch) matchedTrack = trackMatch[1];
-  }
-
-  // Parse original panel to get export names for Tooltip, Button, Show
-  const panelImportMatch = origPanelSrc.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
-  const panelImports = {};
-  if (panelImportMatch) {
-    for (const part of panelImportMatch[1].split(",")) {
-      const [orig, local] = part.trim().split(/\s+as\s+/);
-      panelImports[local || orig] = orig;
-    }
-  }
+  if (!headerExtMatch) throw new Error("无法解析会话顶栏挂钩，未写入补丁。");
+  const headerExt = headerExtMatch[1];
 
   const exportIdx = out.lastIndexOf("export{");
   const exportsStr = exportIdx !== -1 ? out.slice(exportIdx) : "";
   function findInternalName(exportName, fallback) {
     if (!exportName) return fallback;
-    const m = exportsStr.match(new RegExp(`([a-zA-Z0-9_$]+)\\s+as\\s+${exportName}\\b`));
+    const escaped = exportName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = exportsStr.match(new RegExp(`([a-zA-Z0-9_$]+)\\s+as\\s+${escaped}(?=[,}])`));
     return m ? m[1] : fallback;
   }
 
-  const matchedTooltip = findInternalName(panelImports["i"], "AH");
-  const matchedButton = findInternalName(panelImports["e"], "zH");
-  const matchedShow = findInternalName(panelImports["m"], "R");
+  const matchedTooltip = findInternalName(symbols.Tooltip);
+  const matchedButton = findInternalName(symbols.Button);
+  const matchedShow = findInternalName(symbols.Show);
+  const matchedIconComponent = findInternalName(symbols.Icon);
+  const matchedCleanup = findInternalName(symbols.onCleanup);
+  const matchedH = findInternalName(symbols.insert);
+  const matchedF = findInternalName(symbols.createComponent);
+  const matchedIcon = matchedIconComponent;
+  if (![matchedTooltip, matchedButton, matchedShow, matchedIconComponent, matchedCleanup, matchedH, matchedF].every(Boolean)) {
+    throw new Error("无法解析 /btw 主包组件，未写入补丁。");
+  }
 
   const replacementIse = [
     `${matchedIseName}=e=>{`,
@@ -391,7 +301,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
     `import(\`./sidebar-codex.js\`).then(m=>{window.__oc_cx_sidebar=m}).catch(()=>{});`,
     `let n=e.layout,r=e.sessions,i=${matchedDoe}(e),a=${matchedE}(()=>!!r.current()),`,
     `mainTab={id:\`main\`,get title(){return\`/btw\`},draggable:!1,closable:\`compact\`,fallback:!0,label:()=>((()=>{var r=${matchedOoe}(),a=r.firstChild;return ${matchedH}(r,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),a),${matchedH}(a,()=>\`/btw\`),r})())};`,
-    `e.add(${headerExt},{at:\`session.header\`,order:15,render:p=>{${matchedTrack}(()=>p.session);return ${matchedF}(${matchedShow},{get when(){return p.session.id},get children(){return ${matchedF}(${matchedTooltip},{value:\`/btw 随时问答 (Alt+B)\`,placement:\`bottom\`,get children(){return ${matchedF}(${matchedButton},{type:\`button\`,variant:\`ghost-muted\`,class:\`group shrink-0\`,style:{padding:\`0 6px\`,color:\`var(--v2-text-text-faint)\`},onClick:()=>{p.session.id&&n.toggle(\`btw:main\`,p.session)},get\"aria-expanded\"(){return n.state(\`btw:main\`,p.session)===\`visible\`},\"aria-label\":\`/btw 随时问答\`,get children(){var el=${matchedOoe}(),sp=el.firstChild;return ${matchedH}(el,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),sp),${matchedH}(sp,()=>\`/btw\`),el}})}})}})}});`,
+    `e.add(${headerExt},{at:\`session.header\`,order:15,render:p=>{return ${matchedF}(${matchedShow},{get when(){return p.session.id},get children(){return ${matchedF}(${matchedTooltip},{value:\`/btw 随时问答 (Alt+B)\`,placement:\`bottom\`,get children(){return ${matchedF}(${matchedButton},{type:\`button\`,variant:\`ghost-muted\`,class:\`group shrink-0\`,style:{padding:\`0 6px\`,color:\`var(--v2-text-text-faint)\`},onClick:()=>{p.session.id&&n.toggle(\`btw:main\`,p.session)},get\"aria-expanded\"(){return n.state(\`btw:main\`,p.session)===\`visible\`},\"aria-label\":\`/btw 随时问答\`,get children(){var el=${matchedOoe}(),sp=el.firstChild;return ${matchedH}(el,${matchedF}(${matchedIcon},{name:\`bubble-5\`,size:\`small\`}),sp),${matchedH}(sp,()=>\`/btw\`),el}})}})}})}});`,
     `e.add(${matchedCmdExt},()=>({id:\`ask\`,title:\`/btw 随时问答\`,description:\`打开右侧多轮问答面板，支持划词引用、自由切换模型与上下文控制\`,group:e.t(\`command.category.session\`),section:\`session\`,bind:\`alt+b\`,slash:{name:\`btw\`,arguments:!0},enabled:!n.narrow()&&a(),run:arg=>{let cur=r.current();if(!cur?.id)return;if(window.__oc_btw_slash){window.__oc_btw_slash(arg,cur);return}n.toggle(\`btw:main\`,cur)}}));`,
     `e.add(${matchedSideExt},{id:\`main\`,region:\`side\`,normalize:()=>\`main\`,legacy:{btw:\`main\`},list:t=>t.open.length>0?[mainTab]:[],render:p=>${matchedF}(${matchedZeWrapper},{get children(){return ${matchedF}(t,{btw:i,get session(){return p.session},get id(){return\`main\`}})}})})`,
     "}",
@@ -486,7 +396,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
 
   if (vTabsInjected) {
     // Capture at module scope: the vertical-tab component shadows A with its UI store.
-    out = `const __oc_cx_onCleanup=${matchedA};\n${out}`;
+    out = `const __oc_cx_onCleanup=${matchedCleanup};\n${out}`;
     console.log("[patch] 成功注入 Codex 侧边栏与置顶模块挂钩。");
   } else {
     console.warn("[patch] 警告：未能匹配垂直标签栏挂钩，跳过 Codex 侧边栏注入。");
@@ -497,10 +407,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
     /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\{bridge:([a-zA-Z0-9_$]+)\.(?:extensions|plugins),zoom:([^,]+),dialog:\(\)=>!!([a-zA-Z0-9_$]+)\.active([^}]*)\}\)/
   );
   if (fleMatch) {
-    const fnStart = out.lastIndexOf("function ", fleMatch.index);
-    const fnHeader = out.slice(fnStart, fleMatch.index);
-    const sigMatch = fnHeader.match(/\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=([a-zA-Z0-9_$]+)\(\)/);
-    const sigFn = sigMatch ? sigMatch[1] : (matchedZe || "S");
+    const sigFn = findInternalName(symbols.createSignal);
     const bridgeProp = fleMatch[0].includes(".plugins") ? "plugins" : "extensions";
     const extraProps = fleMatch[6] || "";
     const replacement = `[__oc_mod_dlg,__oc_set_mod_dlg]=${sigFn}(!1),__oc_reg_mod_dlg=(window.__oc_set_dialog_active=__oc_set_mod_dlg),${fleMatch[1]}=${fleMatch[2]}({bridge:${fleMatch[3]}.${bridgeProp},zoom:${fleMatch[4]},dialog:()=>!!${fleMatch[5]}.active||__oc_mod_dlg()${extraProps}})`;
@@ -513,7 +420,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc) {
   return out;
 }
 
-function patchSessionRouteBundle(src, origMainSrc = "", symbols = {}) {
+function patchSessionRouteBundle(src) {
   let out = src;
 
   // 1. Allow right side panel to be resized down to 340px instead of 480px minimum
@@ -566,126 +473,7 @@ function patchSessionRouteBundle(src, origMainSrc = "", symbols = {}) {
     throw new Error("Could not locate e.setRevealMessage in route bundle.");
   }
 
-  // 4. Inject "Branch to new chat" button next to copy button in assistant response footer
-  const routeImportMatch = out.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/);
-  const routeImports = {};
-  if (routeImportMatch) {
-    for (const part of routeImportMatch[1].split(",")) {
-      const [orig, local] = part.trim().split(/\s+as\s+/);
-      routeImports[orig] = local || orig;
-    }
-  }
-
-  const exportIdx = origMainSrc ? origMainSrc.lastIndexOf("export{") : -1;
-  const exportsStr = exportIdx !== -1 ? origMainSrc.slice(exportIdx) : "";
-  function getExportAlias(internalName) {
-    if (!internalName) return null;
-    const m = exportsStr.match(new RegExp(`\\b${internalName}\\s+as\\s+([a-zA-Z0-9_$]+)`));
-    return m ? m[1] : null;
-  }
-
-  const sessionUrlInternal = origMainSrc?.match(/function\s+([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\{return`\/server\/\$\{/)?.[1];
-  const sessionUrlExport = getExportAlias(sessionUrlInternal);
-
-  const sdkInternal = origMainSrc?.match(/var\s+([a-zA-Z0-9_$]+)=\(\)=>([a-zA-Z0-9_$]+)\(\)\.ctx\.sdk/);
-  const sdkExport = getExportAlias(sdkInternal?.[1]);
-  const srvExport = getExportAlias(sdkInternal?.[2]);
-
-  const stInternal = origMainSrc?.match(/var\s+([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.ctx\.data/)?.[1];
-  const stExport = getExportAlias(stInternal);
-
-  const navInternal = origMainSrc?.match(/([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.navigatorFactory\(\)/)?.[1];
-  const prmInternal = origMainSrc?.match(/([a-zA-Z0-9_$]+)=\(\)=>[a-zA-Z0-9_$]+\(\)\.params\b/)?.[1];
-  const navExport = getExportAlias(navInternal);
-  const prmExport = getExportAlias(prmInternal);
-
-  const sigFn = (symbols?.createSignal && routeImports[symbols.createSignal]) || routeImports["bl"] || "en";
-  const toastFn = routeImports["di"] || (symbols?.showToast && routeImports[symbols.showToast]) || "Ot";
-  const sessionUrlFn = (sessionUrlExport && routeImports[sessionUrlExport]) || routeImports["Ir"] || "M";
-  const sdkHook = (sdkExport && routeImports[sdkExport]) || routeImports["gi"] || "nt";
-  const srvHook = (srvExport && routeImports[srvExport]) || routeImports["yi"] || "pt";
-  const stHook = (stExport && routeImports[stExport]) || routeImports["vi"] || "Jn";
-  const navHook = (navExport && routeImports[navExport]) || routeImports["Zs"] || "xn";
-  const prmHook = (prmExport && routeImports[prmExport]) || routeImports["Qs"] || "Nn";
-
-  const declRegex = /\[[a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\]=[a-zA-Z0-9_$]+\(!1\),[a-zA-Z0-9_$]+=async\(\)=>\{await [a-zA-Z0-9_$]+\(e\.text\)&&\(.+?setTimeout\(.+?2e3\)\)\};/;
-  const declMatch = out.match(declRegex);
-
-  const jsxRegex = /var\s+([a-zA-Z0-9_$]+)=[a-zA-Z0-9_$]+\(\);return\s+([a-zA-Z0-9_$]+)\(\1,([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+),\{get icon\(\)\{return [a-zA-Z0-9_$]+\(\)\?`check`:`copy`\}.+?n\.t\([`'"]ui\.message\.copyResponse[`'"]\).*?\}\),null\),/;
-  const jsxMatch = out.match(jsxRegex);
-
-  if (!declMatch || !jsxMatch) {
-    throw new Error("Could not locate assistant message copy footer in route bundle.");
-  }
-
-  const containerVar = jsxMatch[1];
-  const insertFn = jsxMatch[2];
-  const createCompFn = jsxMatch[3];
-  const iconBtnComp = jsxMatch[4];
-
-  const declInject = [
-    declMatch[0],
-    `let _oc_sdk,_oc_srv,_oc_st,_oc_nav,_oc_prm;`,
-    `try{_oc_sdk=${sdkHook}()}catch(e){}`,
-    `try{_oc_srv=${srvHook}()}catch(e){}`,
-    `try{_oc_st=${stHook}()}catch(e){}`,
-    `try{_oc_nav=${navHook}()}catch(e){}`,
-    `try{_oc_prm=${prmHook}()}catch(e){}`,
-    `let [__oc_fk_l,__oc_set_fk_l]=${sigFn}(!1),`,
-    `__oc_fork=async(evt)=>{`,
-    `if(evt){evt.preventDefault?.();evt.stopPropagation?.()}`,
-    `if(__oc_fk_l())return;`,
-    `let sId=_oc_prm?.id||window.__oc_current_session?.identity?.sessionID?.()||window.__oc_current_session?.identity?.params?.id||window.__oc_timeline_ctrl?.sessionID?.()||window.__oc_app_ext?.sessions?.current?.()?.id;`,
-    `if(!sId){`,
-    `${toastFn}({title:n.t('common.requestFailed')||'请求失败',description:'未找到当前会话ID'});`,
-    `return;`,
-    `}`,
-    `__oc_set_fk_l(!0);`,
-    `try{`,
-    `let sdk=_oc_sdk||window.__oc_app_ext?.sdk;`,
-    `let srv=_oc_srv;`,
-    `let st=_oc_st;`,
-    `let nav=_oc_nav;`,
-    `let srvKey=srv?.key||window.__oc_current_session?.identity?.params?.serverKey||'local';`,
-    `if(!sdk?.api?.session?.fork)throw new Error('Fork API 未就绪');`,
-    `let msgs=st?.session?.message?.list?.(sId)||[];`,
-    `let cIdx=msgs.findIndex(m=>m.id===e.message.id);`,
-    `let bId=void 0;`,
-    `if(cIdx!==-1){let nu=msgs.slice(cIdx+1).find(m=>m.type==='user');nu&&(bId=nu.id)}`,
-    `let fk=await sdk.api.session.fork({sessionID:sId,before:bId});`,
-    `if(fk?.id){`,
-    `let curS=st?.session?.get?.(sId)||window.__oc_current_session?.data?.info?.();`,
-    `let isZh=n.locale()?.startsWith('zh')??!0,tag=isZh?'分支':'Branch';`,
-    `let rawT=curS?.title||(isZh?'新会话':'New Session');`,
-    `let clnT=rawT.replace(/\\s*\\((?:分支(?:\\s*\\d+)?|branch(?:\\s*\\d+)?|fork(?:\\s*#?\\d+)?)\\)$/i,'').trim();`,
-    `let allS=st?.session?.list?.()||[];`,
-    'let esc=clnT.replace(/[.*+?^${}()|[\\]\\\\]/g,\'\\\\$&\');',
-    `let bRe=new RegExp('^'+esc+' \\\\('+tag+'(?: (\\\\d+))?\\\\)$'),has1=!1,maxN=1;`,
-    `for(let s of allS){if(!s?.title)continue;let m=s.title.match(bRe);m&&(m[1]===void 0?has1=!0:(maxN=Math.max(maxN,parseInt(m[1],10))))}`,
-    `let nTitle=!has1?(clnT+' ('+tag+')'):(clnT+' ('+tag+' '+(maxN+1)+')');`,
-    `await sdk.api.session.update({sessionID:fk.id,title:nTitle}).catch(()=>{});`,
-    `fk.title=nTitle;`,
-    `st?.session?.remember?.(fk);`,
-    `if(nav){nav(${sessionUrlFn}(srvKey,fk.id))}else{window.location.hash=${sessionUrlFn}(srvKey,fk.id)}`,
-    `}`,
-    `}catch(err){`,
-    `let msg=err instanceof Error?err.message:String(err);`,
-    `${toastFn}({title:n.t('common.requestFailed')||'请求失败',description:msg});`,
-    `}finally{`,
-    `__oc_set_fk_l(!1);`,
-    `}`,
-    `},`,
-    `__oc_fork_lbl=()=>{`,
-    `let isZh=n.locale()?.startsWith('zh')??!0;`,
-    `return __oc_fk_l()?(isZh?'正在分支...':'Branching...'):(isZh?'分支到新聊天':'Branch to new chat');`,
-    `};`
-  ].join("");
-
-  const branchJsx = `${insertFn}(${containerVar},${createCompFn}(${iconBtnComp},{icon:\`fork\`,get label(){return __oc_fork_lbl()},get disabled(){return __oc_fk_l()},onMouseDown:e=>e.preventDefault(),onClick:__oc_fork,get"aria-label"(){return __oc_fork_lbl()}}),null),`;
-
-  out = out.replace(declMatch[0], () => declInject);
-  out = out.replace(jsxMatch[0], () => `${jsxMatch[0]}${branchJsx}`);
-
+  // Leave native message actions (including fork) and the copy footer untouched.
   return out;
 }
 
@@ -831,29 +619,28 @@ function main() {
   // Rewrite main bundle imports in custom panel using the resolved symbol aliases
   const oldImportsRegex = /import\s*\{[\s\S]*?\}\s*from\s*["']\.\/main-[^"']+["'];?/;
   const newImports = `import {
-  ${symbols.onChange} as onChange,
   ${symbols.Tooltip} as Tooltip,
   ${symbols.useExtension} as useExtension,
   ${symbols.IconButton} as IconButton,
   ${symbols.createMemo} as createMemo,
-  ${symbols.ScrollView} as ScrollView,
   ${symbols.Show} as Show,
   ${symbols.Icon} as Icon,
-  ${symbols.Match} as Match,
-  ${symbols.memoBool} as memoBool,
   ${symbols.Button} as Button,
   ${symbols.createSignal} as createSignal,
   ${symbols.showToast} as showToast,
   ${symbols.insert} as insert,
   ${symbols.template} as template,
-  ${symbols.Switch} as Switch,
   ${symbols.createComponent} as createComponent,
   ${symbols.For} as For,
   ${symbols.createEffect} as createEffect,
   ${symbols.onCleanup} as onCleanup,
+${symbols.Markdown ? `  ${symbols.Markdown} as Markdown,` : ""}
+${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
 } from "./${mainFileName}";`;
 
   customPanelSrc = customPanelSrc.replace(oldImportsRegex, newImports);
+  if (symbols.Markdown) customPanelSrc = customPanelSrc.replace(/import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["'];?/, "");
+  if (symbols.TextShimmer) customPanelSrc = customPanelSrc.replace(/import\s*\{[^}]*\}\s*from\s*["']\.\/text-shimmer-[^"']+["'];?/, "");
 
   // Extract the exact markdown and text-shimmer chunks used by the target panel
   const mdMatch = origPanelSrc.match(/from\s*["']\.\/(markdown-[^"']+)["']/);
@@ -866,6 +653,9 @@ function main() {
     shMatch?.[1] ||
     Object.keys(assetsMap).find((k) => /^text-shimmer-[A-Za-z0-9_-]+\.js$/.test(k)) ||
     "text-shimmer.js";
+  if ((!symbols.Markdown && !assetsMap[markdownFileName]) || (!symbols.TextShimmer && !assetsMap[shimmerFileName])) {
+    throw new Error("无法定位 Markdown / TextShimmer 导出或模块，未写入补丁。");
+  }
 
   customPanelSrc = customPanelSrc.replace(
     /import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["']/,
@@ -876,8 +666,8 @@ function main() {
     `import { t as TextShimmer } from "./${shimmerFileName}"`
   );
 
-  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc), "utf8");
-  const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc, origMainSrc, symbols), "utf8");
+  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols), "utf8");
+  const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
   const customSidebarSrc = fs.readFileSync(customSidebarPath, "utf8");

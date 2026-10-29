@@ -1,14 +1,14 @@
 {
   "name": "opencode-desktop-mod",
   "version": "1.0.0",
-  "description": "Minimalist left timeline scrubber, upgraded /btw companion chat and branch-to-new-chat mod for OpenCode Desktop",
+  "description": "Timeline scrubber, upgraded /btw companion, Codex sidebar, voice input and chat layout mod for OpenCode Desktop",
   "type": "module",
   "main": "apply-mod.mjs",
   "bin": {
     "opencode-desktop-mod": "./apply-mod.mjs"
   },
   "scripts": {
-    "test": "node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs",
+    "test": "node bundle.check.mjs && node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs",
     "apply": "node apply-mod.mjs",
     "restore": "node apply-mod.mjs --restore"
   },
@@ -25,8 +25,6 @@
     "opencode-desktop",
     "timeline",
     "btw",
-    "branch",
-    "fork",
     "electron-mod"
   ],
   "engines": {
