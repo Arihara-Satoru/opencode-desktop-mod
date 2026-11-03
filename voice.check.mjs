@@ -206,7 +206,84 @@ assert.match(patchedV220, /__oc_allow_voice_media\(e,n,i\)/);
 assert.match(patchedV220, /__oc_allow_voice_media\(e,n,i,r\)/);
 new vm.Script(patchedV220.replace(/^import[^\n]+\n/, ""));
 
+// 2.2.5 installs one handler pair per shared Electron Session and tracks every
+// desktop window in a Set. Do not replace that Set or bypass its membership.
+const fixtureV225 = 'var allowed=new Set([`clipboard-sanitized-write`,`notifications`]),windows=new WeakMap;function register(win){if(win.isDestroyed()||win.webContents.isDestroyed())return;let wc=win.webContents,session=wc.session,ids=windows.get(session)??install(session),id=wc.id;if(ids.has(id))return;ids.add(id);let cleanup=()=>{ids.delete(id)};wc.once(`destroyed`,cleanup),win.once(`closed`,cleanup)}function install(session){let ids=new Set;return windows.set(session,ids),session.setPermissionRequestHandler((wc,permission,callback,details)=>{if(permission===`media`){callback(ids.has(wc.id)&&trusted(details.requestingUrl)&&details.isMainFrame&&`mediaTypes`in details&&!!details.mediaTypes?.length&&details.mediaTypes.every(type=>type===`audio`));return}callback(allowed.has(permission)&&trusted(details.requestingUrl)&&ids.has(wc.id))}),session.setPermissionCheckHandler((wc,permission,origin,details)=>permission===`media`?wc!==null&&ids.has(wc.id)&&trusted(details.requestingUrl)&&details.isMainFrame&&details.mediaType===`audio`:!allowed.has(permission)||(wc?!ids.has(wc.id):ids.size===0)?!1:trusted(details.requestingUrl)||trusted(origin)),ids}';
+const patchedV225 = patchVoiceDesktopMain(fixtureV225);
+new vm.Script(patchedV225.replace(/^import[^\n]+\n/, ""));
+// Only add the guarded Mod branch; keep native callbacks and window cleanup.
+assert.equal(patchedV225.replace(/^import[^\n]+\n/, "").replace(/if\(wc!==null&&ids\.has\(wc\.id\)&&__oc_allow_voice_media\(wc,permission,details\)\)return callback\(!0\);/, "")
+  .replace(/wc!==null&&ids\.has\(wc\.id\)&&__oc_allow_voice_media\(wc,permission,details,origin\)\|\|\(([^;]+)\)(?=\),ids\})/, "$1"), fixtureV225);
+
+function permissionHarness(source, allow = () => false, bindings = {}, registerName = "register") {
+  let requests = 0, checks = 0;
+  const session = {
+    setPermissionRequestHandler(fn) { this.request = fn; requests++; },
+    setPermissionCheckHandler(fn) { this.check = fn; checks++; },
+  };
+  const scope = { __oc_allow_voice_media: allow, trusted: url => url === frame.url, ...bindings };
+  vm.createContext(scope);
+  vm.runInContext(source.replace(/^import[^\n]+\n/, ""), scope);
+  const register = vm.runInContext(registerName, scope);
+  const makeWindow = id => Object.assign(new EventEmitter(), { isDestroyed: () => false,
+    webContents: Object.assign(new EventEmitter(), { id, session, isDestroyed: () => false, getURL: () => frame.url }) });
+  const one = makeWindow(7), two = makeWindow(8), outsider = makeWindow(9);
+  register(one); register(two); register(one);
+  assert.equal(requests, 1); assert.equal(checks, 1, "Install handlers once per Session, not once per window");
+  return { session, one, two, outsider };
+}
+async function checkSharedPermissions(originalSource, patchedSource, bindings = {}, registerName = "register") {
+  const original = permissionHarness(originalSource, () => false, bindings, registerName);
+  const patched = permissionHarness(patchedSource, () => false, bindings, registerName);
+  const audioRequest = { requestingUrl: frame.url, isMainFrame: true, mediaTypes: ["audio"] };
+  const audioCheck = { requestingUrl: frame.url, isMainFrame: true, mediaType: "audio" };
+  const invokeRequest = (session, wc, permission, details) => {
+    const answers = [];
+    session.request(wc, permission, value => answers.push(value), details);
+    assert.equal(answers.length, 1, "Always complete a permission request exactly once");
+    return answers[0];
+  };
+  for (const who of ["one", "two", "outsider"]) {
+    for (const permission of ["media", "notifications", "clipboard-sanitized-write", "geolocation"]) {
+      for (const details of [audioRequest, { ...audioRequest, mediaTypes: ["video"] }, { ...audioRequest, mediaTypes: ["audio", "video"] },
+        { ...audioRequest, requestingUrl: "https://evil.example" }, { ...audioRequest, isMainFrame: false }]) {
+        assert.equal(invokeRequest(patched.session, patched[who].webContents, permission, details),
+          invokeRequest(original.session, original[who].webContents, permission, details));
+      }
+      for (const details of [audioCheck, { ...audioCheck, mediaType: "video" }, { ...audioCheck, requestingUrl: "https://evil.example" }, { ...audioCheck, isMainFrame: false }]) {
+        assert.equal(patched.session.check(patched[who].webContents, permission, frame.url, details),
+          original.session.check(original[who].webContents, permission, frame.url, details));
+      }
+    }
+  }
+  // Even an over-permissive Mod stub cannot admit browser WebContents or a
+  // desktop window removed from the official live-window Set.
+  const guarded = permissionHarness(patchedSource, () => true, bindings, registerName);
+  assert.equal(invokeRequest(guarded.session, guarded.outsider.webContents, "media", audioRequest), false);
+  assert.equal(guarded.session.check(guarded.outsider.webContents, "media", frame.url, audioCheck), false);
+  assert.equal(guarded.session.check(null, "media", frame.url, audioCheck), false);
+  guarded.one.webContents.emit("destroyed");
+  assert.equal(invokeRequest(guarded.session, guarded.one.webContents, "media", audioRequest), false);
+  assert.equal(guarded.session.check(guarded.one.webContents, "media", frame.url, audioCheck), false);
+  assert.equal(invokeRequest(guarded.session, guarded.two.webContents, "media", audioRequest), true);
+  guarded.two.emit("closed");
+  assert.equal(guarded.session.check(null, "notifications", frame.url, audioCheck), false);
+  assert.equal(guarded.session.check(guarded.two.webContents, "media", frame.url, audioCheck), false);
+  const armed = permissionHarness(patchedSource, sandbox.allow, bindings, registerName);
+  await handler(event, "arm");
+  assert.equal(invokeRequest(armed.session, armed.one.webContents, "media", audioRequest), true);
+  assert.equal(invokeRequest(armed.session, armed.one.webContents, "media", { ...audioRequest, mediaTypes: ["video"] }), false);
+  assert.equal(invokeRequest(armed.session, armed.one.webContents, "media", { ...audioRequest, requestingUrl: "https://evil.example" }), false);
+  assert.equal(armed.session.check(armed.one.webContents, "media", frame.url, { ...audioCheck, isMainFrame: false }), false);
+  await handler(event, "cancel");
+}
+await checkSharedPermissions(fixtureV225, patchedV225);
+
 assert.throws(() => patchVoiceDesktopMain("unsupported version"));
+assert.throws(() => patchVoiceDesktopMain(fixtureV225 + fixtureV225), /request=2|check=2/);
+assert.throws(() => patchVoiceDesktopMain(fixture + fixtureV225), /request=2|check=2/);
+assert.throws(() => patchVoiceDesktopMain(fixtureV225.replace("!ids.has(wc.id)", "ids.has(wc.id)")), /未写入补丁/);
+assert.throws(() => patchVoiceDesktopMain(fixtureV225.replace("session.setPermissionCheckHandler", "other.setPermissionCheckHandler")), /未写入补丁/);
 
 // Verify the DOM selector matches both new session (draft) and active session dock.
 const voiceInputSrc = fs.readFileSync(new URL("./voice-input.mjs", import.meta.url), "utf8");
@@ -269,11 +346,13 @@ assert.equal(formSelector, 'form[data-component="composer"]', "Must match all co
 }
 
 // Optional full packaging test against a COPY of an installed clean ASAR.
-if (process.env.OPENCODE_TEST_ASAR) {
+const asarIndex = process.argv.indexOf("--asar");
+const testAsar = asarIndex >= 0 ? process.argv[asarIndex + 1] : process.env.OPENCODE_TEST_ASAR;
+if (testAsar) {
   const parent = process.platform === "win32" ? path.join(os.homedir(), "AppData/Local/Temp/opencode") : os.tmpdir();
   const dir = fs.mkdtempSync(path.join(parent, "voice-check-"));
   try {
-    const target = path.join(dir, "app.asar"); fs.copyFileSync(process.env.OPENCODE_TEST_ASAR, target);
+    const target = path.join(dir, "app.asar"); fs.copyFileSync(testAsar, target);
     const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], { cwd: import.meta.dirname, env: { ...process.env, OPENCODE_ASAR_PATH: target }, encoding: "utf8" });
     console.log(apply());
     const first = fs.readFileSync(target);
@@ -282,6 +361,34 @@ if (process.env.OPENCODE_TEST_ASAR) {
     const offset = 8 + first.readUInt32LE(4);
     const read = n => first.subarray(offset + Number(n.offset), offset + Number(n.offset) + n.size);
     const out = header.files.out.files;
+    const originalMain = (() => {
+      const clean = fs.readFileSync(`${target}.bak`);
+      const cleanHeader = JSON.parse(clean.subarray(16, 16 + clean.readUInt32LE(12)));
+      const entry = cleanHeader.files.out.files.main.files["index.js"];
+      const start = 8 + clean.readUInt32LE(4) + Number(entry.offset);
+      return clean.subarray(start, start + entry.size).toString();
+    })();
+    const patchedMain = read(out.main.files["index.js"]).toString();
+    assert.equal(patchedMain, patchVoiceDesktopMain(originalMain), "Package the exact validated permission hook");
+    const requestAt = originalMain.indexOf(".setPermissionRequestHandler(");
+    const installAt = originalMain.lastIndexOf("function ", requestAt);
+    const installEnd = originalMain.indexOf("function ", requestAt);
+    const install = originalMain.slice(installAt, installEnd);
+    const shared = install.match(/^function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=new Set;return ([\w$]+)\.set\(\2,\3\),/);
+    if (shared) {
+      const registerAt = originalMain.lastIndexOf("function ", installAt - 1);
+      const register = originalMain.slice(registerAt, installAt);
+      const registerName = register.match(/^function ([\w$]+)\(/)[1];
+      const trust = install.match(/([\w$]+)\.has\(([\w$]+)\)&&([\w$]+)\(([\w$]+)\.requestingUrl\)/);
+      assert.ok(trust, "Resolve the official permission allowlist/trust predicate");
+      const bindings = { [shared[4]]: new WeakMap(),
+        [trust[1]]: new Set(["clipboard-sanitized-write", "notifications"]), [trust[3]]: url => url === frame.url };
+      const nativePermissions = register + install;
+      const patchedPermissions = patchVoiceDesktopMain(nativePermissions);
+      assert.ok(patchedMain.includes(patchedPermissions.replace(/^import[^\n]+\n/, "")), "Keep the exact official window registration/cleanup functions");
+      await checkSharedPermissions(nativePermissions, patchedPermissions, bindings, registerName);
+      console.log("Official shared-Session permissions: native parity, multiple windows, audio isolation and cleanup passed");
+    }
     for (const [name, n] of Object.entries(out.main.files)) {
       if (name === "index.js" || name.startsWith("voice-")) {
         const file = path.join(dir, name); fs.writeFileSync(file, read(n)); execFileSync(process.execPath, ["--check", file]);
@@ -296,4 +403,4 @@ if (process.env.OPENCODE_TEST_ASAR) {
     console.log("Copied ASAR packaging, generated module syntax and idempotence: passed");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
-console.log("Voice config, permission isolation, IPC, multipart upload, recorder lifecycle and patch anchors: passed");
+console.log("Voice config, shared-Session permission isolation, IPC, multipart upload, recorder lifecycle and patch anchors: passed");

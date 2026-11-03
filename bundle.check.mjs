@@ -12,13 +12,58 @@ const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
 const patchRoute = vm.runInNewContext(patcher.slice(patcher.indexOf("function patchSessionRouteBundle("), patcher.indexOf("function main(")) + ";patchSessionRouteBundle");
 const nativeActions = 'function footer(){return nativeCopy()}function fork(){return sdk.api.session.fork({sessionID:id,before:messageID})}';
-const routeFixture = 'let a=ctrl(s),b=virt({sessionID:s.identity.sessionID,scrollRef:a.scroller});e.setRevealMessage?.((t,r)=>{let i=r?items().findIndex(x=>is(x,`AssistantPart`)&&x.group.type===`part`):0;flush(),v.scrollToIndex(i)});' + nativeActions;
+const routeFixture = 'let a=ctrl(s),b=virt({sessionID:s.identity.sessionID,scrollRef:a.scroller});e.setRevealMessage?.((t,r)=>{let i=r?items().findIndex(x=>is(x,`AssistantPart`)&&x.group.type===`part`&&x.group.ref.partID===r):-1,n=i>=0?i:e.projection.messageRowIndex().get(t);n!==void 0&&(flush(),v.scrollToIndex(n,{align:i>=0?`center`:`start`}))});' + nativeActions;
 const patchedRoute = patchRoute(routeFixture);
 assert.ok(patchedRoute.endsWith(nativeActions), "Native copy and fork code must remain byte-identical");
 assert.ok(patchedRoute.includes("window.__oc_timeline_ctrl"));
 assert.ok(patchedRoute.includes("window.__oc_virtual_scroll"));
 assert.ok(!patchedRoute.includes("__oc_fork"));
 assert.throws(() => resolvePanelSymbols("", "", "export{}"), /未写入补丁/);
+
+function checkTimelineBridge(route, userRows) {
+  const matches = [...route.matchAll(/window\.__oc_virtual_scroll=(\{M:([\w$]+),be:([\w$]+),unpin:\3,getRowIndex:[\s\S]*?\}),([\w$]+)\.setRevealMessage/g)];
+  assert.equal(matches.length, 1, "Emit exactly one virtual-scroll bridge, not just match the native callback");
+  if (userRows === undefined) {
+    const nativeReveal = route.slice(matches[0].index + matches[0][0].length).match(/^\?\.\(\([\w$]+,[\w$]+\)=>\{[^}]+?\.scrollToIndex/);
+    assert.ok(nativeReveal, "Find the original reveal callback next to the bridge");
+    userRows = nativeReveal[0].includes("UserMessage");
+  }
+  const [, expression, virtualizer, flush, receiver] = matches[0];
+  const lookup = expression.match(/([\w$]+)\(\)\.findIndex\(([\w$]+)=>([\w$]+)\(\2,[`'"]AssistantPart[`'"]\)/);
+  assert.ok(lookup, "Use the native row lookup and type predicate");
+  let flushed = 0;
+  const instance = {};
+  const rows = [
+    { kind: "UserMessage", userMessageID: "msg", group: { type: "user" } },
+    { kind: "AssistantPart", group: { type: "part", ref: { partID: "part" } } },
+  ];
+  const bridge = vm.runInNewContext(`(${expression})`, {
+    [virtualizer]: instance, [flush]: () => { flushed++; },
+    [receiver]: { projection: { messageRowIndex: () => new Map([["msg", 8], ["projected", 9]]) } },
+    [lookup[1]]: () => rows, [lookup[3]]: (row, kind) => row.kind === kind,
+  });
+  assert.equal(bridge.M, instance);
+  assert.equal(bridge.be, bridge.unpin);
+  bridge.unpin();
+  assert.equal(flushed, 1, "Call the resolved native anchor/scroll-adjustment flusher");
+  assert.equal(bridge.getRowIndex("msg", "part"), 1, "Prefer the exact assistant part");
+  assert.equal(bridge.getRowIndex("msg", "missing"), userRows ? 0 : 8, "Keep native user-row vs projection precedence");
+  assert.equal(bridge.getRowIndex("msg"), userRows ? 0 : 8);
+  assert.equal(bridge.getRowIndex("projected"), 9);
+  assert.equal(bridge.getRowIndex("missing"), undefined);
+}
+
+checkTimelineBridge(patchedRoute, false);
+// 2.2.5 renamed the callback's second parameter and prefers actual user rows.
+const routeFixtureV225 = 'let a=ctrl(s),b=virt({sessionID:s.identity.sessionID,scrollRef:a.scroller});e.setRevealMessage?.((t,n)=>{if(!active())return;let i=n?items().findIndex(x=>is(x,`AssistantPart`)&&x.group.type===`part`&&x.group.ref.partID===n):-1,a=items().findIndex(x=>is(x,`UserMessage`)&&x.userMessageID===t),o=i>=0?i:a>=0?a:e.projection.messageRowIndex().get(t);o!==void 0&&(clearAnchor(),v.scrollToIndex(o,{align:i>=0?`center`:`start`}))});cleanup(()=>e.setRevealMessage?.(()=>{}));' + nativeActions;
+for (const fixture of [routeFixtureV225, routeFixtureV225.replaceAll("(t,n)", "(messageID,$part)").replaceAll("=n?", "=$part?").replaceAll("===n)", "===$part)").replaceAll("===t)", "===messageID)").replaceAll(".get(t)", ".get(messageID)"), routeFixtureV225.replaceAll("items()", "r()")]) {
+  const patched = patchRoute(fixture);
+  assert.ok(patched.includes(fixture.slice(fixture.indexOf("e.setRevealMessage"))), "Leave native reveal, copy and fork code byte-identical");
+  checkTimelineBridge(patched, true);
+}
+assert.throws(() => patchRoute(routeFixtureV225 + routeFixtureV225), /virtual|reveal/i, "Reject ambiguous reveal callbacks");
+assert.throws(() => patchRoute(routeFixtureV225.replace("clearAnchor(),", "")), /virtual|flusher|reveal/i, "Never guess a missing flusher name");
+assert.throws(() => patchRoute(routeFixtureV225 + 'other.setRevealMessage?.((id)=>jump(id))'), /virtual|reveal/i, "Reject additional unknown reveal callbacks, not known no-op cleanup");
 
 async function checkCompanionSetup(main, panelName) {
   const start = main.indexOf("=e=>{window.__oc_app_ext=e;") + 1;
@@ -151,6 +196,7 @@ if (asarIndex >= 0) {
     await checkCompanionSetup(patched.read(assetsPath + mainName), panelName);
     const result = patched.read(assetsPath + routeName);
     assert.equal(result, patchRoute(route));
+    checkTimelineBridge(result);
     assert.ok(result.includes("ui.message.forkMessage"), "Keep official fork action");
     const copyFooter = route.match(/function [\w$]+\(e\)\{(?:(?!function [\w$]+\(e\)\{)[\s\S])*?ui\.message\.copyResponse[\s\S]*?\}\}/)?.[0];
     assert.ok(copyFooter && result.includes(copyFooter), "Do not inject into assistant footer");
@@ -184,4 +230,4 @@ if (asarIndex >= 0) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-console.log("Bundle checks passed: native actions preserved, unknown symbols rejected, empty/mapped Vite dependencies and companion setup/render.");
+console.log("Bundle checks passed: native actions preserved, virtual-scroll bridge execution/row precedence, unknown symbols rejected, empty/mapped Vite dependencies and companion setup/render.");

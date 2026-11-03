@@ -457,22 +457,30 @@ function patchSessionRouteBundle(src) {
   }
 
   // 3. Expose virtualizer instance M and scrollAdjustment flusher on window.__oc_virtual_scroll
-  const revealMatch = out.match(
-    /e\.setRevealMessage\?\.\(\(([a-zA-Z0-9_$]+),([a-zA-Z0-9_$]+)\)=>\{(?:if\(![a-zA-Z0-9_$]+\(\)\)return;)?let [a-zA-Z0-9_$]+=\2\?([a-zA-Z0-9_$]+)\(\)\.findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+,[`'"]AssistantPart[`'"]\)[^}]+?([a-zA-Z0-9_$]+)\.scrollToIndex/
-  );
-  if (revealMatch) {
-    const itemsFn = revealMatch[3];
-    const checkFn = revealMatch[4];
-    const virtVar = revealMatch[5];
-    const flusherMatch = revealMatch[0].match(/([a-zA-Z0-9_$]+)\(\),[a-zA-Z0-9_$]+\.scrollToIndex/);
-    const flusherVar = flusherMatch ? flusherMatch[1] : "be";
-    out = out.replace(
-      "e.setRevealMessage?.((t,r)=>{",
-      `window.__oc_virtual_scroll={M:${virtVar},be:${flusherVar},unpin:${flusherVar},getRowIndex:(t,r)=>{let i=r?${itemsFn}().findIndex(e=>${checkFn}(e,\`AssistantPart\`)&&e.group.type===\`part\`&&e.group.ref.partID===r):-1;return i>=0?i:e.projection.messageRowIndex().get(t)}},e.setRevealMessage?.((t,r)=>{`
-    );
-  } else {
-    throw new Error("Could not locate e.setRevealMessage in route bundle.");
+  const reveals = [...out.matchAll(
+    /([\w$]+)\.setRevealMessage\?\.\(\(([\w$]+),([\w$]+)\)=>\{(?:if\(![\w$]+\(\)\)return;)?let [\w$]+=\3\?([\w$]+)\(\)\.findIndex\([\w$]+=>([\w$]+)\([\w$]+,[`'"]AssistantPart[`'"]\)[^}]+?([\w$]+)\.scrollToIndex/g
+  )];
+  const revealRegistrations = (out.match(/\.setRevealMessage\?\.\(/g) ?? []).length - (out.match(/\.setRevealMessage\?\.\(\(\)=>\{\}\)/g) ?? []).length;
+  if (reveals.length !== 1 || revealRegistrations !== 1) {
+    throw new Error(`Could not uniquely locate virtual-scroll reveal callback (${reveals.length} matches).`);
   }
+  const revealMatch = reveals[0];
+  const [, receiver, messageParam, partParam, itemsFn, checkFn, virtVar] = revealMatch;
+  const flusherMatch = revealMatch[0].match(/([\w$]+)\(\),([\w$]+)\.scrollToIndex$/);
+  if (!flusherMatch || flusherMatch[2] !== virtVar) throw new Error("Could not locate virtual-scroll flusher; refusing to guess a symbol.");
+  const flusherVar = flusherMatch[1];
+  // 2.2.5 first tries an actual UserMessage row before the projection fallback.
+  const userRow = revealMatch[0].match(/,([\w$]+)=([\w$]+)\(\)\.findIndex\(([\w$]+)=>([\w$]+)\(\3,[`'"]UserMessage[`'"]\)&&\3\.userMessageID===([\w$]+)\)/);
+  if ((userRow && (userRow[2] !== itemsFn || userRow[4] !== checkFn || userRow[5] !== messageParam)) || (!userRow && revealMatch[0].includes("UserMessage"))) {
+    throw new Error("Could not safely resolve virtual-scroll user-row lookup.");
+  }
+  // Reuse native callback parameters so they cannot shadow its captured helpers.
+  const userLookup = userRow ? `let __oc_user_row=${itemsFn}().findIndex(__oc_row=>${checkFn}(__oc_row,\`UserMessage\`)&&__oc_row.userMessageID===${messageParam});if(__oc_user_row>=0)return __oc_user_row;` : "";
+  const bridge = `window.__oc_virtual_scroll={M:${virtVar},be:${flusherVar},unpin:${flusherVar},getRowIndex:(${messageParam},${partParam})=>{let __oc_part_row=${partParam}?${itemsFn}().findIndex(__oc_row=>${checkFn}(__oc_row,\`AssistantPart\`)&&__oc_row.group.type===\`part\`&&__oc_row.group.ref.partID===${partParam}):-1;if(__oc_part_row>=0)return __oc_part_row;${userLookup}return ${receiver}.projection.messageRowIndex().get(${messageParam})}},`;
+  const revealStart = `${receiver}.setRevealMessage?.((${messageParam},${partParam})=>{`;
+  if (!revealMatch[0].startsWith(revealStart)) throw new Error("Could not locate virtual-scroll insertion point.");
+  // Insert at the matched position, never a hardcoded pair of minified params.
+  out = out.slice(0, revealMatch.index) + bridge + out.slice(revealMatch.index);
 
   // Leave native message actions (including fork) and the copy footer untouched.
   return out;
