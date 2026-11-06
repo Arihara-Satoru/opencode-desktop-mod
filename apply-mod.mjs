@@ -310,28 +310,28 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
 
   out = out.slice(0, iStart) + replacementIse + out.slice(iEnd);
 
-  // 3. Isolate ephemeral `ses_btw_*` SSE streaming sessions from main store & notifications
+  // 3. Isolate ephemeral SSE streaming sessions from main store & notifications
   if (out.includes("function de(e){switch(e.type){")) {
     out = out.replace(
       "function de(e){switch(e.type){",
-      'function de(e){if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;switch(e.type){'
+      'function de(e){if(e?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.(e?.data?.sessionID))return;switch(e.type){'
     );
   } else {
     out = out.replace(
       /function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\)\{switch\(\2\.type\)\{/,
-      'function $1($2){if($2?.data?.sessionID?.startsWith?.("ses_btw_"))return;switch($2.type){'
+      'function $1($2){if($2?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.($2?.data?.sessionID))return;switch($2.type){'
     );
   }
 
   if (out.includes("D=e.sdk.event.listen(e=>{")) {
     out = out.replace(
       "D=e.sdk.event.listen(e=>{",
-      'D=e.sdk.event.listen(e=>{if(e?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
+      'D=e.sdk.event.listen(e=>{if(e?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.(e?.data?.sessionID))return;'
     );
   } else {
     out = out.replace(
       /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/,
-      '$1$2.sdk.event.listen($3=>{if($3?.data?.sessionID?.startsWith?.("ses_btw_"))return;'
+      '$1$2.sdk.event.listen($3=>{if($3?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.($3?.data?.sessionID))return;'
     );
   }
 

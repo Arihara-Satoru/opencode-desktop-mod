@@ -1184,6 +1184,17 @@ function resolveSelectedModel(session, modelKey, defaultModel) {
   return defaultModel || resolveSessionDefaultModel(session);
 }
 
+const T_CHARS_BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
+function generateBtwEphemeralSessionId() {
+  const n = Date.now();
+  const s = Math.floor(Math.random() * 1000);
+  const r = BigInt(n) * 0x1000n + BigInt(s);
+  const a = ~r;
+  const c = Array.from({ length: 6 }, (l, b) => Number((a >> BigInt(40 - 8 * b)) & 0xffn).toString(16).padStart(2, "0")).join("");
+  const d = crypto.getRandomValues(new Uint8Array(14));
+  return "ses_" + c + Array.from(d, (l) => T_CHARS_BASE36[l % T_CHARS_BASE36.length]).join("");
+}
+
 // ============================================================================
 // Core /btw Multi-Turn Generation Logic
 // ============================================================================
@@ -1447,10 +1458,14 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
       headers: directory ? { "x-opencode-directory": encodeURIComponent(directory) } : undefined,
     };
 
-    // Primary Path: True Real-Time SSE Streaming via Isolated Ephemeral Session (`ses_btw_*`)
+    // Primary Path: True Real-Time SSE Streaming via Isolated Ephemeral Session
     let sseHandled = false;
     if (client?.session?.create && client?.session?.prompt && (dataBus?.listen || client?.event?.subscribe)) {
-      const tempSessionId = `ses_btw_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+      if (typeof window !== "undefined") {
+        window.__oc_active_btw_sessions = window.__oc_active_btw_sessions || new Set();
+      }
+      const tempSessionId = generateBtwEphemeralSessionId();
+      window?.__oc_active_btw_sessions?.add?.(tempSessionId);
       let unlisten = null;
       let completedParts = "";
       let currentPart = "";
@@ -1568,7 +1583,10 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
             title: "/btw",
             model: resolvedModel,
             location: directory ? { directory } : undefined,
-            permissions: [{ action: "tool.use", resource: "*", effect: "deny" }],
+            permissions: [
+              { action: "edit", resource: "*", effect: "deny" },
+              { action: "shell", resource: "*", effect: "deny" },
+            ],
           },
           reqOptions
         );
@@ -1594,6 +1612,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
         }
         // Only fall back to stateless generate when the ephemeral session could not even be created
       } finally {
+        window?.__oc_active_btw_sessions?.delete?.(tempSessionId);
         try {
           unlisten?.();
         } catch {}
