@@ -200,6 +200,13 @@ if (asarIndex >= 0) {
     assert.ok(result.includes("ui.message.forkMessage"), "Keep official fork action");
     const copyFooter = route.match(/function [\w$]+\(e\)\{(?:(?!function [\w$]+\(e\)\{)[\s\S])*?ui\.message\.copyResponse[\s\S]*?\}\}/)?.[0];
     assert.ok(copyFooter && result.includes(copyFooter), "Do not inject into assistant footer");
+    const nativeQuoteAt = route.indexOf("data-component=timeline-quote");
+    if (nativeQuoteAt >= 0) {
+      const nativeQuoteStart = route.lastIndexOf("var ", nativeQuoteAt);
+      const nativeQuoteEnd = route.indexOf('s([`mousedown`]);', nativeQuoteAt);
+      assert.ok(nativeQuoteStart >= 0 && nativeQuoteEnd > nativeQuoteAt, "Resolve native quote toolbar/controller boundaries");
+      assert.ok(result.includes(route.slice(nativeQuoteStart, nativeQuoteEnd)), "Keep the entire official quote toolbar/controller byte-identical");
+    }
     let checked = 0;
     function walk(tree, prefix = "") {
       for (const [name, entry] of Object.entries(tree.files || {})) {

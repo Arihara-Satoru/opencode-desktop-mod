@@ -242,6 +242,21 @@ const COMPANION_CSS = `
   animation: oc-pop-in 0.1s ease-out;
 }
 
+/* Share the official toolbar without positioning over its quote action. */
+.oc-selection-popover[data-native-quote] {
+  position: static;
+  z-index: auto;
+  padding: 0 0 0 2px;
+  margin: 0 0 0 2px;
+  border: none;
+  border-left: 1px solid var(--v2-border-border-base, rgba(128, 128, 128, 0.2));
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  animation: none;
+}
+
 @keyframes oc-pop-in {
   from { opacity: 0; transform: translate(-50%, -92%) scale(0.96); }
   to { opacity: 1; transform: translate(-50%, -100%) scale(1); }
@@ -867,6 +882,8 @@ function updatePrefs(patch) {
 
 const sessionStoreMap = new Map();
 const activeAbortControllers = new Map();
+let latestServerDefaultModel = null;
+let latestDisabledModelKeys = new Set();
 const liveMessageSignals = new Map();
 const [streamActivityTick, setStreamActivityTick] = createSignal(0);
 let scrollBottomIfPinnedCallback = null;
@@ -1124,8 +1141,11 @@ function buildMainSessionContextSnippet(session, mode) {
   return `<main_session_context mode="${mode}">\n以下是当前主会话的上下文供参考：\n\n${formatted}\n</main_session_context>`;
 }
 
-function resolveSessionDefaultModel(session) {
+function resolveSessionDefaultModel(session, serverDefault) {
   try {
+    if (session?.model?.providerID && session?.model?.id) {
+      return { providerID: session.model.providerID, id: session.model.id };
+    }
     const info = session?.id ? session.server?.data?.session?.get?.(session.id) : undefined;
     if (info?.model?.providerID && info?.model?.id) {
       return { providerID: info.model.providerID, id: info.model.id };
@@ -1137,15 +1157,23 @@ function resolveSessionDefaultModel(session) {
         return { providerID: m.model.providerID, id: m.model.id };
       }
     }
+    const def = serverDefault || latestServerDefaultModel;
+    if (def?.providerID && def?.id) {
+      return { providerID: def.providerID, id: def.id };
+    }
     const loc = session?.directory ? { directory: session.directory } : undefined;
     const models = session?.server?.data?.location?.model?.list?.(loc) || [];
+    const nonOpencode = models.find(
+      (m) => m.providerID !== "opencode" && m.enabled !== false && m.status !== "deprecated"
+    );
+    if (nonOpencode) return { providerID: nonOpencode.providerID, id: nonOpencode.id };
     const active = models.find((m) => m.enabled !== false && m.status !== "deprecated");
     if (active) return { providerID: active.providerID, id: active.id };
   } catch {}
   return undefined;
 }
 
-function resolveSelectedModel(session, modelKey) {
+function resolveSelectedModel(session, modelKey, defaultModel) {
   if (modelKey && modelKey.includes("/")) {
     const idx = modelKey.indexOf("/");
     return {
@@ -1153,7 +1181,7 @@ function resolveSelectedModel(session, modelKey) {
       id: modelKey.slice(idx + 1),
     };
   }
-  return resolveSessionDefaultModel(session);
+  return defaultModel || resolveSessionDefaultModel(session);
 }
 
 // ============================================================================
@@ -1540,7 +1568,7 @@ async function sendBtwMessage({ session, threadId, text, quotes, images, legacyC
             title: "/btw",
             model: resolvedModel,
             location: directory ? { directory } : undefined,
-            permissions: [{ action: "*", resource: "*", effect: "deny" }],
+            permissions: [{ action: "tool.use", resource: "*", effect: "deny" }],
           },
           reqOptions
         );
@@ -1786,21 +1814,105 @@ function BtwPanel(props) {
   const [fetchedModels, setFetchedModels] = createSignal([]);
   const [openMenu, setOpenMenu] = createSignal(""); // "" | "thread" | "model" | "context"
   const [modelFilter, setModelFilter] = createSignal("");
+  const [serverDefaultModel, setServerDefaultModel] = createSignal(null);
+  const [mainSessionModel, setMainSessionModel] = createSignal(null);
+  const [disabledModelKeys, setDisabledModelKeys] = createSignal(new Set());
 
   createEffect(() => {
     const s = sessionMemo();
-    if (!s?.server?.client?.model?.list) return;
+    if (!s?.server?.client) return;
     const loc = s.location?.directory
       ? { directory: s.location.directory }
       : s.directory
       ? { directory: s.directory }
       : undefined;
-    s.server.client.model
-      .list({ location: loc })
-      .then((res) => {
-        if (Array.isArray(res?.data)) setFetchedModels(res.data);
-      })
-      .catch(() => {});
+
+    // 1. Fetch server configured default model
+    if (s.server.client.model?.default) {
+      s.server.client.model
+        .default({ location: loc })
+        .then((res) => {
+          if (res?.data?.id && res?.data?.providerID) {
+            latestServerDefaultModel = { providerID: res.data.providerID, id: res.data.id };
+            setServerDefaultModel(latestServerDefaultModel);
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 2. Fetch current main session model directly
+    if (s.id && s.server.client.session?.get) {
+      s.server.client.session
+        .get({ sessionID: s.id })
+        .then((res) => {
+          if (res?.data?.model?.id && res?.data?.model?.providerID) {
+            setMainSessionModel({ providerID: res.data.model.providerID, id: res.data.model.id });
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 3. Fetch model list
+    if (s.server.client.model?.list) {
+      s.server.client.model
+        .list({ location: loc })
+        .then((res) => {
+          if (Array.isArray(res?.data)) setFetchedModels(res.data);
+        })
+        .catch(() => {});
+    }
+
+    // 4. Fetch disabled models from config
+    const disabled = new Set();
+    const addFromConfigObj = (cfg) => {
+      if (!cfg || typeof cfg !== "object") return;
+      const providers = cfg.providers || cfg.provider || {};
+      for (const [pId, pVal] of Object.entries(providers)) {
+        if (pVal && typeof pVal.models === "object") {
+          for (const [mId, mVal] of Object.entries(pVal.models)) {
+            if (mVal && (mVal.disabled === true || mVal.enabled === false)) {
+              disabled.add(`${pId}/${mId}`.toLowerCase());
+              disabled.add(mId.toLowerCase());
+            }
+          }
+        }
+      }
+    };
+
+    if (s.server.client.config?.get) {
+      s.server.client.config
+        .get({ location: loc })
+        .then((res) => {
+          const docs = Array.isArray(res) ? res : res?.data || [];
+          for (const doc of docs) {
+            if (doc?.info) addFromConfigObj(doc.info);
+            if (doc?.path && s.server.client.file?.read) {
+              s.server.client.file
+                .read({ path: doc.path, location: loc })
+                .then((fileRes) => {
+                  try {
+                    const text = typeof fileRes === "string" ? fileRes : new TextDecoder().decode(fileRes);
+                    addFromConfigObj(JSON.parse(text));
+                    latestDisabledModelKeys = new Set(disabled);
+                    setDisabledModelKeys(new Set(disabled));
+                  } catch {}
+                })
+                .catch(() => {});
+            }
+          }
+          latestDisabledModelKeys = new Set(disabled);
+          setDisabledModelKeys(new Set(disabled));
+        })
+        .catch(() => {});
+    }
+  });
+
+  createEffect(() => {
+    const disSet = disabledModelKeys();
+    const cur = globalPrefs().modelKey;
+    if (cur && disSet.has(cur.toLowerCase())) {
+      updatePrefs({ modelKey: "" });
+    }
   });
 
   const availableModels = createMemo(() => {
@@ -1808,10 +1920,26 @@ function BtwPanel(props) {
     const loc = s?.directory ? { directory: s.directory } : undefined;
     const fromData = s?.server?.data?.location?.model?.list?.(loc) || [];
     const raw = fromData.length > 0 ? fromData : fetchedModels();
-    return raw.filter((m) => m && m.enabled !== false && m.status !== "deprecated");
+    const disSet = disabledModelKeys();
+    return raw.filter((m) => {
+      if (!m) return false;
+      if (m.enabled === false) return false;
+      if (m.disabled === true) return false;
+      if (m.status === "deprecated") return false;
+      if (m.settings?.disabled === true) return false;
+      const key = `${m.providerID}/${m.id}`.toLowerCase();
+      if (disSet.has(key) || disSet.has(m.id.toLowerCase())) return false;
+      return true;
+    });
   });
 
-  const sessionDefaultModel = createMemo(() => resolveSessionDefaultModel(sessionMemo()));
+  const sessionDefaultModel = createMemo(() => {
+    return (
+      mainSessionModel() ||
+      resolveSessionDefaultModel(sessionMemo(), serverDefaultModel()) ||
+      serverDefaultModel()
+    );
+  });
 
   // Root panel container (matches original panel-c7bWJg2T.js classes)
   const root = document.createElement("div");
@@ -2535,10 +2663,16 @@ function BtwPanel(props) {
       groups.get(pid).push(m);
     }
 
-    for (const [pid, list] of groups.entries()) {
+    const sortedGroups = [...groups.entries()].sort(([a], [b]) => {
+      if (a === "opencode") return 1;
+      if (b === "opencode") return -1;
+      return a.localeCompare(b);
+    });
+
+    for (const [pid, list] of sortedGroups) {
       const grp = document.createElement("div");
       grp.className = "oc-btw-menu-group-label";
-      grp.textContent = pid;
+      grp.textContent = pid === "opencode" ? "opencode (官方免费体验)" : pid;
       modelListScroll.appendChild(grp);
 
       for (const m of list) {
@@ -2723,9 +2857,25 @@ export function initCompanion(ext) {
 // ----------------------------------------------------------------------------
 function setupSelectionQuotePopover(ext) {
   let popoverEl = null;
-  let currentSelectedText = "";
+  let showTimer;
+  const nativeSelector = '[data-component="timeline-quote"]';
+
+  const selectedText = () => {
+    const sel = window.getSelection();
+    if (!sel?.rangeCount || sel.isCollapsed) return;
+    const element = node => node instanceof Element ? node : node?.parentElement;
+    const anchor = element(sel.anchorNode), focus = element(sel.focusNode);
+    if (!anchor?.isConnected || !focus?.isConnected) return;
+    const panel = anchor?.closest('[data-slot="session-chat-panel"]');
+    const excluded = '[data-component="session-composer-dock"], .oc-gpt-rail, input, textarea, [contenteditable="true"]';
+    if (!panel || focus?.closest('[data-slot="session-chat-panel"]') !== panel || anchor.closest(excluded) || focus.closest(excluded)) return;
+    const text = sel.toString().trim();
+    if (text.length < 2) return;
+    return { sel, text };
+  };
 
   const removePopover = () => {
+    clearTimeout(showTimer);
     if (popoverEl) {
       popoverEl.remove();
       popoverEl = null;
@@ -2733,7 +2883,7 @@ function setupSelectionQuotePopover(ext) {
   };
 
   const triggerQuoteToBtw = (explainImmediately = false) => {
-    const text = currentSelectedText || window.getSelection()?.toString()?.trim() || "";
+    const text = selectedText()?.text;
     if (!text) return;
     const session = ext.sessions.current();
     if (!session?.id) return;
@@ -2755,86 +2905,99 @@ function setupSelectionQuotePopover(ext) {
     }
   };
 
-  document.addEventListener("mouseup", (e) => {
-    if (popoverEl && popoverEl.contains(e.target)) return;
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : "";
-      if (!text || text.length < 2) {
-        removePopover();
-        return;
-      }
-      const anchorNode = sel.anchorNode;
-      const el = anchorNode instanceof Element ? anchorNode : anchorNode?.parentElement;
-      if (!el || !el.closest('[data-slot="session-chat-panel"]')) {
-        removePopover();
-        return;
-      }
-      if (el.closest('[data-component="session-composer-dock"], .oc-gpt-rail, input, textarea')) {
-        removePopover();
-        return;
-      }
+  const showPopover = () => {
+    const selected = selectedText();
+    if (!selected || !ext.sessions.current()?.id) {
+      removePopover();
+      return;
+    }
+    const { sel } = selected;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      removePopover();
+      return;
+    }
 
-      currentSelectedText = text;
-      const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) {
-        removePopover();
-        return;
-      }
+    if (!popoverEl) {
+      popoverEl = document.createElement("div");
+      popoverEl.className = "oc-selection-popover";
 
-      if (!popoverEl) {
-        popoverEl = document.createElement("div");
-        popoverEl.className = "oc-selection-popover";
+      const btnQuote = document.createElement("button");
+      btnQuote.type = "button";
+      btnQuote.className = "oc-sel-btn";
+      btnQuote.innerHTML = `<span>引用到 /btw</span><span class="oc-sel-kbd">Alt+Q</span>`;
+      // Keep the selection on pointer activation; click also supports Enter/Space.
+      btnQuote.addEventListener("mousedown", ev => ev.preventDefault());
+      btnQuote.addEventListener("click", () => triggerQuoteToBtw(false));
 
-        const btnQuote = document.createElement("button");
-        btnQuote.type = "button";
-        btnQuote.className = "oc-sel-btn";
-        btnQuote.innerHTML = `<span>引用到 /btw</span><span class="oc-sel-kbd">Alt+Q</span>`;
-        btnQuote.addEventListener("mousedown", (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          triggerQuoteToBtw(false);
-        });
+      const sep = document.createElement("div");
+      sep.className = "oc-sel-sep";
 
-        const sep = document.createElement("div");
-        sep.className = "oc-sel-sep";
+      const btnExplain = document.createElement("button");
+      btnExplain.type = "button";
+      btnExplain.className = "oc-sel-btn";
+      btnExplain.textContent = "解释";
+      btnExplain.addEventListener("mousedown", ev => ev.preventDefault());
+      btnExplain.addEventListener("click", () => triggerQuoteToBtw(true));
 
-        const btnExplain = document.createElement("button");
-        btnExplain.type = "button";
-        btnExplain.className = "oc-sel-btn";
-        btnExplain.textContent = "解释";
-        btnExplain.addEventListener("mousedown", (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          triggerQuoteToBtw(true);
-        });
+      popoverEl.append(btnQuote, sep, btnExplain);
+    }
 
-        popoverEl.append(btnQuote, sep, btnExplain);
-        document.body.appendChild(popoverEl);
-      }
+    const native = document.querySelector(nativeSelector);
+    if (native) {
+      popoverEl.setAttribute("data-native-quote", "");
+      if (popoverEl.parentElement !== native) native.appendChild(popoverEl);
+      return;
+    }
+    popoverEl.removeAttribute("data-native-quote");
+    if (popoverEl.parentElement !== document.body) document.body.appendChild(popoverEl);
+    const left = Math.min(window.innerWidth - 110, Math.max(110, rect.left + rect.width / 2));
+    const top = Math.max(44, rect.top);
+    popoverEl.style.left = `${left}px`;
+    popoverEl.style.top = `${top}px`;
+  };
 
-      const left = Math.min(window.innerWidth - 110, Math.max(110, rect.left + rect.width / 2));
-      const top = Math.max(44, rect.top);
-      popoverEl.style.left = `${left}px`;
-      popoverEl.style.top = `${top}px`;
-    }, 15);
+  const schedulePopover = () => {
+    clearTimeout(showTimer);
+    // The native selection controller debounces for 150ms. Let it mount first;
+    // older versions without a native quote toolbar keep the standalone pill.
+    showTimer = setTimeout(showPopover, 180);
+  };
+  document.addEventListener("mouseup", e => {
+    if (popoverEl?.contains(e.target) || e.target?.closest?.(nativeSelector)) return;
+    schedulePopover();
+  });
+  document.addEventListener("selectionchange", () => {
+    if (!selectedText()) removePopover();
+    else schedulePopover();
   });
 
+  // The official toolbar can mount after mouseup or be rebuilt on scroll/layout.
+  // Observe child changes only; do not alter its buttons, controller or handlers.
+  const observer = new MutationObserver(() => {
+    if (!popoverEl) return;
+    const native = document.querySelector(nativeSelector);
+    if (native && popoverEl.parentElement !== native && selectedText()) showPopover();
+    else if (popoverEl.hasAttribute("data-native-quote") && !native) removePopover();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
   document.addEventListener("mousedown", (e) => {
+    if (e.target?.closest?.(nativeSelector)) return;
     if (popoverEl && !popoverEl.contains(e.target)) removePopover();
   });
 
   document.addEventListener("scroll", () => {
-    if (popoverEl) removePopover();
+    if (popoverEl && !popoverEl.hasAttribute("data-native-quote")) removePopover();
   }, true);
 
   window.addEventListener("keydown", (e) => {
-    if (e.altKey && (e.key === "q" || e.key === "Q")) {
-      const selText = window.getSelection()?.toString()?.trim();
-      if (selText) {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (e.key === "Escape") { removePopover(); return; }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "q" || e.key === "Q")) {
+      if (selectedText()) {
         e.preventDefault();
-        currentSelectedText = selText;
         triggerQuoteToBtw(false);
       }
     }
