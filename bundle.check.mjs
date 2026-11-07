@@ -6,7 +6,7 @@ import vm from "node:vm";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolvePanelSymbols } from "./bundle-symbols.mjs";
+import { resolvePanelSymbols, resolveTooltipSymbol, resolvePanelChunkImport } from "./bundle-symbols.mjs";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
@@ -19,6 +19,32 @@ assert.ok(patchedRoute.includes("window.__oc_timeline_ctrl"));
 assert.ok(patchedRoute.includes("window.__oc_virtual_scroll"));
 assert.ok(!patchedRoute.includes("__oc_fork"));
 assert.throws(() => resolvePanelSymbols("", "", "export{}"), /未写入补丁/);
+for (const answer of ["answer()", "answer().answer"]) {
+  const fixture = 'import{render as md}from"./content.js";create(md,{get text(){return ' + answer + '},class:`text-14-regular`})';
+  assert.deepEqual(resolvePanelChunkImport(fixture, "Markdown"), { file: "content.js", external: "render" });
+}
+assert.throws(() => resolvePanelChunkImport('import{t as md}from"./markdown-grammar.js"', "Markdown"), /未写入补丁/);
+
+const tooltipImpl = 'function inner(e){let t,n,r,[i,a]=split(e,[`children`,`inactive`,`triggerTabIndex`,`value`]);return render(i,a)}';
+const tooltipWrapper = 'function outer(e){return component(Show,{get when(){return!e.inactive},get fallback(){return e.children},get children(){return component(inner,e)}})}';
+const tooltipExports = 'export{component as cc,Show as sh,outer as tip}';
+assert.equal(resolveTooltipSymbol(tooltipImpl + 'export{inner as tip}', "cc", "sh"), "tip", "Keep directly exported legacy Tooltip");
+assert.equal(resolveTooltipSymbol(tooltipWrapper + tooltipImpl + tooltipExports, "cc", "sh"), "tip", "Resolve the public 2.2.6 wrapper, not its private implementation");
+const renamedTooltip = (tooltipWrapper + tooltipImpl + tooltipExports).replaceAll("outer", "$public").replaceAll("inner", "$private").replaceAll("component", "$create").replaceAll("Show", "$show");
+assert.equal(resolveTooltipSymbol(renamedTooltip, "cc", "sh"), "tip", "No hardcoded minifier names");
+const publicTooltip = vm.runInNewContext(tooltipWrapper + ';outer', {
+  component: (fn, props) => fn(props), Show: props => props.when ? props.children : props.fallback,
+  inner: props => ({ wrapped: props.value }),
+});
+assert.equal(publicTooltip({ inactive: true, children: "native-child" }), "native-child", "Keep official inactive/fallback behavior");
+assert.equal(publicTooltip({ value: "tooltip-content" }).wrapped, "tooltip-content");
+for (const invalid of [tooltipImpl + tooltipExports, tooltipWrapper.replace("return!e.inactive", "return e.inactive") + tooltipImpl + tooltipExports,
+  tooltipWrapper.replace("component(Show", "unknown(Show") + tooltipImpl + tooltipExports,
+  tooltipWrapper + tooltipWrapper.replaceAll("outer", "other") + tooltipImpl + tooltipExports,
+  tooltipWrapper + tooltipImpl + tooltipImpl.replaceAll("inner", "duplicate") + tooltipExports,
+  tooltipWrapper + tooltipImpl + tooltipExports.replace("outer as tip", "outer as tip,inner as ambiguous")]) {
+  assert.throws(() => resolveTooltipSymbol(invalid, "cc", "sh"), /未写入补丁/, "Reject unknown, private or ambiguous Tooltip structures");
+}
 
 function checkTimelineBridge(route, userRows) {
   const matches = [...route.matchAll(/window\.__oc_virtual_scroll=(\{M:([\w$]+),be:([\w$]+),unpin:\3,getRowIndex:[\s\S]*?\}),([\w$]+)\.setRevealMessage/g)];
@@ -224,17 +250,113 @@ if (asarIndex >= 0) {
     apply();
     assert.deepEqual(fs.readFileSync(target), first);
     const patched = archive(first);
-    await checkCompanionSetup(patched.read(assetsPath + mainName), panelName);
+    console.log(execFileSync(process.execPath, ["--experimental-vm-modules", "module-link.check.mjs", target,
+      panelName, mainName, routeName, "sidebar-codex.js", "chat-width.js", "voice-input.mjs", "long-text.mjs"], { cwd, encoding: "utf8" }));
+    const patchedMain = patched.read(assetsPath + mainName);
+    await checkCompanionSetup(patchedMain, panelName);
+    // Execute the real companion module and initializer with the official Solid
+    // primitives; only DOM/services are isolated. The setup test above stubs it.
+    const panelSource = patched.read(assetsPath + panelName);
+    if (symbols.Markdown) assert.match(panelSource, new RegExp(`${symbols.Markdown} as Markdown`), "Import the exact native Markdown component");
+    const startupWindow = new EventTarget();
+    let observers = 0, intervals = 0;
+    const styleElements = new Map();
+    const startupDocument = Object.assign(new EventTarget(), {
+      head: { appendChild: el => styleElements.set(el.id, el) }, body: {},
+      getElementById: id => styleElements.get(id), createElement: () => ({}), querySelector: () => null,
+    });
+    const startup = vm.runInNewContext(panelSource.replace(/import\s*\{[^}]*\}\s*from\s*["'][^"']+["'];?/g, "")
+      .replace("export function initCompanion", "function initCompanion").replace(/export\s*\{\s*BtwPanel as default\s*\};?/, "") + ';({initCompanion})', {
+      ...runtime, window: startupWindow, document: startupDocument, Element: class {},
+      MutationObserver: class { observe() { observers++; } },
+      localStorage: { getItem: () => null, setItem() {} },
+      setInterval: () => { intervals++; }, requestAnimationFrame: fn => fn(), setTimeout, clearTimeout,
+    });
+    const toggles = [];
+    const startupExt = { sessions: { current: () => undefined }, layout: { toggle: (...args) => toggles.push(args) } };
+    startup.initCompanion(startupExt);
+    startup.initCompanion(startupExt);
+    assert.equal(observers, 2, "Start both real selection and timeline observers once");
+    assert.equal(intervals, 1, "Start real timeline polling once");
+    assert.equal(typeof startupWindow.__oc_btw_slash, "function");
+    startupWindow.__oc_btw_slash("", { id: "startup-session" });
+    assert.equal(toggles[0][0], "btw:main");
+    assert.ok(patchedMain.includes("host.className='oc-cx-host-container"), "Do not silently skip Codex sidebar injection");
+    const sidebarAt = patchedMain.indexOf("host.className='oc-cx-host-container");
+    const sidebarStart = patchedMain.lastIndexOf("(()=>{var ", sidebarAt);
+    // settings has its own IIFE: find the actual final return, not that closure.
+    const sidebarReturn = patchedMain.indexOf("return ", patchedMain.indexOf("cxStart=m=>", sidebarAt));
+    const sidebarFinish = patchedMain.indexOf("})()", sidebarReturn) + 4;
+    const sidebarCode = patchedMain.slice(sidebarStart, sidebarFinish);
+    const deps = sidebarCode.match(/var deps=\{servers:([\w$]+),tabsStore:([\w$]+),tabs:([\w$]+),current:\(\)=>([\w$]+)\(\),tabKey:([\w$]+),serverKey:([\w$]+)\.key,settings:\(\(\)=>\{try\{return ([\w$]+)\(\)/);
+    const expr = sidebarCode.match(/orig=([\w$]+)\(([\w$]+),\{/);
+    const template = sidebarCode.match(/^\(\(\)=>\{var ([\w$]+)=([\w$]+)\(\)/);
+    const insert = sidebarCode.match(/return ([\w$]+)\(\w+,\[host,origWrap\]\)/);
+    assert.ok(deps && expr && template && insert, "Resolve injected sidebar bindings");
+    let mounted, cleaned = false, mountedHost;
+    const nativeTabs = [{ id: "one" }], nativeStore = {}, nativeServers = {};
+    const bindings = {
+      [deps[1]]: nativeServers, [deps[2]]: nativeStore, [deps[3]]: nativeTabs,
+      [deps[4]]: () => nativeTabs[0], [deps[5]]: tab => tab.id, [deps[6]]: { key: s => s.id }, [deps[7]]: () => ({}),
+      [expr[1]]: (component, props) => props === undefined ? component() : ({ component, props }), [expr[2]]: () => {},
+      [template[2]]: () => ({}), [insert[1]]: () => {},
+      __oc_cx_onCleanup: fn => { bindings.dispose = fn; },
+      document: { createElement: () => ({ style: {} }) },
+      window: { __oc_cx_sidebar: { mount(host, deps) { mountedHost = host; mounted = deps; return () => { cleaned = true; }; } } },
+    };
+    vm.runInNewContext(sidebarCode, bindings);
+    assert.equal(mounted.tabs, nativeTabs);
+    assert.equal(mounted.tabsStore, nativeStore);
+    assert.equal(mounted.servers, nativeServers);
+    assert.equal(mounted.current(), nativeTabs[0]);
+    assert.equal(mounted.tabKey(nativeTabs[0]), "one");
+    assert.ok(mountedHost.className.includes("oc-cx-host-container"));
+    bindings.dispose();
+    assert.equal(cleaned, true, "Dispose sidebar on native container cleanup");
+
+    // Run the shipped adapter too: a successful mount alone cannot prove that
+    // a changed Global context API can still supply projects/history.
+    const adapterSource = fs.readFileSync(path.join(cwd, "cx-sidebar.js"), "utf8")
+      .replace("export function mount", "function mount")
+      .replace("  injectStyle();", '  host.check={api};render=(model)=>{host.model=model;};');
+    const adapterScope = {
+      document: Object.assign(new EventTarget(), { documentElement: { lang: "en" } }), window: new EventTarget(),
+      localStorage: { getItem: () => null, setItem() {} }, setInterval: () => 1, clearInterval() {},
+      setTimeout, clearTimeout, AbortController,
+    };
+    const adapterMount = vm.runInNewContext(adapterSource + ';mount', adapterScope);
+    const adapterHost = { style: {}, classList: { add() {} }, addEventListener() {}, querySelectorAll: () => [], isConnected: true };
+    const context = {
+      isLocal: true, projects: { used: () => [{ id: "native-project", name: "Native project", worktree: "/native", sandboxes: [] }] },
+      data: { session: { list: () => [] } },
+      sdk: { connection: { status: () => "connected" }, api: { session: { list: async () => ({
+        data: [{ id: "native-session", title: "Native session", projectID: "native-project", location: { directory: "/native" }, time: { created: 1 } }], cursor: {},
+      }) } } },
+    };
+    const connection = { id: "native-server" };
+    const lookup = key => { assert.equal(key, "native-server"); return context; };
+    const hasModernContext = /serverCtx\([\w$]+\)\{return/.test(main);
+    const adapterDispose = adapterMount(adapterHost, { ...mounted, tabs: [], current: () => undefined,
+      servers: { servers: { list: () => [connection] }, ...(hasModernContext ? { serverCtx: lookup } : { ensureServerCtx: () => context }) },
+    });
+    await adapterHost.check.api.refresh();
+    const adapterSnapshot = adapterHost.check.api.snapshot();
+    assert.equal(adapterSnapshot.servers[0]?.projects[0]?.worktree, "/native", "Read actual project data, not just mount an empty shell");
+    assert.equal(adapterSnapshot.servers[0]?.sessions[0]?.id, "native-session", "Read history through the official context API shape");
+    adapterDispose();
     const result = patched.read(assetsPath + routeName);
     assert.equal(result, patchRoute(route));
     checkTimelineBridge(result);
     assert.ok(result.includes("ui.message.forkMessage"), "Keep official fork action");
     const copyFooter = route.match(/function [\w$]+\(e\)\{(?:(?!function [\w$]+\(e\)\{)[\s\S])*?ui\.message\.copyResponse[\s\S]*?\}\}/)?.[0];
-    assert.ok(copyFooter && result.includes(copyFooter), "Do not inject into assistant footer");
+    // The speed feature intentionally adds metadata inside this enclosing
+    // function. Compare the native footer after applying that same transform.
+    assert.ok(copyFooter && result.includes(patchRoute(routeFixtureV225 + copyFooter).slice(patchRoute(routeFixtureV225).length)), "Keep native copy/footer behavior alongside speed metadata");
     const nativeQuoteAt = route.indexOf("data-component=timeline-quote");
     if (nativeQuoteAt >= 0) {
       const nativeQuoteStart = route.lastIndexOf("var ", nativeQuoteAt);
-      const nativeQuoteEnd = route.indexOf('s([`mousedown`]);', nativeQuoteAt);
+      const nativeQuoteEndMatch = route.slice(nativeQuoteAt).match(/[\w$]+\(\[`mousedown`\]\);/);
+      const nativeQuoteEnd = nativeQuoteEndMatch ? nativeQuoteAt + nativeQuoteEndMatch.index : -1;
       assert.ok(nativeQuoteStart >= 0 && nativeQuoteEnd > nativeQuoteAt, "Resolve native quote toolbar/controller boundaries");
       assert.ok(result.includes(route.slice(nativeQuoteStart, nativeQuoteEnd)), "Keep the entire official quote toolbar/controller byte-identical");
     }
@@ -263,7 +385,7 @@ if (asarIndex >= 0) {
       }
     }
     walk(patched.header);
-    console.log(`Official ASAR integration passed: ${checked} changed scripts, imports, exports, integrity, native fork/footer, Solid runtime, companion setup/render and idempotence.`);
+    console.log(`Official ASAR integration passed: ${checked} changed scripts, real module linking, integrity, native fork/quote/footer, Solid runtime, real companion startup, sidebar data and idempotence.`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1,11 +1,34 @@
 // Resolve meanings, never minifier-local names: those change on every release.
-export function resolvePanelSymbols(panel, route, main) {
+function readExports(main) {
   const exports = new Map();
   const exportBlock = main.slice(main.lastIndexOf("export{") + 7).split("}")[0];
   for (const entry of exportBlock.split(",")) {
     const [internal, external = internal] = entry.trim().split(/\s+as\s+/);
     exports.set(internal, external);
   }
+  return exports;
+}
+
+export function resolveTooltipSymbol(main, createComponent, Show) {
+  const exports = readExports(main);
+  // 2.2.6 moved the implementation behind an inactive/fallback wrapper. Resolve
+  // the prop-splitting implementation first, not a later property read or caller.
+  const implementations = [...main.matchAll(/function\s+([\w$]+)\(([\w$]+)\)\{[^{}]*?\[([\w$]+),([\w$]+)\]=[\w$]+\(\2,\[([^\]]+)\]\)/g)]
+    .filter(match => match[5].split(",").includes("`triggerTabIndex`"));
+  if (implementations.length !== 1) throw new Error(`无法安全解析 Tooltip 实现（匹配 ${implementations.length} 处），未写入补丁。`);
+  const implementation = implementations[0][1];
+  const componentInternal = [...exports].find(([, external]) => external === createComponent)?.[0];
+  const showInternal = [...exports].find(([, external]) => external === Show)?.[0];
+  const wrappers = [...main.matchAll(/function\s+([\w$]+)\(([\w$]+)\)\{return ([\w$]+)\(([\w$]+),\{get when\(\)\{return!\2\.inactive\},get fallback\(\)\{return \2\.children\},get children\(\)\{return \3\(([\w$]+),\2\)\}\}\)\}/g)]
+    .filter(match => match[3] === componentInternal && match[4] === showInternal && match[5] === implementation);
+  if (wrappers.length > 1 || (wrappers.length && exports.has(implementation))) throw new Error("无法安全解析 Tooltip 包装组件（存在歧义），未写入补丁。");
+  const name = wrappers.length ? wrappers[0][1] : implementation;
+  if (!exports.has(name)) throw new Error("无法安全解析 Tooltip 组件（未导出或未知包装结构），未写入补丁。");
+  return exports.get(name);
+}
+
+export function resolvePanelSymbols(panel, route, main) {
+  const exports = readExports(main);
   function find(label, pattern) {
     const names = [...new Set([...main.matchAll(pattern)].map(match => match[1]))];
     if (names.length !== 1 || !exports.has(names[0])) {
@@ -29,22 +52,16 @@ export function resolvePanelSymbols(panel, route, main) {
     onCleanup: find("onCleanup", /function\s+([\w$]+)\([\w$]+\)\{return [\w$]+===null\|\|\([^{}]*\.cleanups\.push\([\w$]+\)\),[\w$]+\}/g),
     createComponent: find("createComponent", /function\s+([\w$]+)\([\w$]+,[\w$]+\)\{if\([^{}]*\.context\)\{(?:(?!function\s)[\s\S]){0,350}?\}return [\w$]+\(\(\)=>[\w$]+\([\w$]+\|\|\{\}\)\)\}/g),
     Show: find("Show", /function\s+([\w$]+)\([\w$]+\)\{let [\w$]+=[\w$]+\.keyed,[\w$]+=[\w$]+\(\(\)=>[\w$]+\.when/g),
+    For: find("For", /For:\(\)=>([\w$]+),Index:/g),
     template: find("template", /function\s+([\w$]+)\([\w$]+,[\w$]+,[\w$]+,[\w$]+\)\{let [\w$]+,[\w$]+=\(\)=>\{let [\w$]+=[\w$]+\?document\.createElementNS/g),
     insert: find("insert", /function\s+([\w$]+)\([\w$]+,[\w$]+,[\w$]+,[\w$]+\)\{if\([\w$]+!==void 0&&!/g),
     useExtension: find("usePlugin/useExtension", /function\s+([\w$]+)\(\)\{let\s+[\w$]+=[\w$]+\([\w$]+\);if\(![\w$]+\)throw Error\([`'"]use(?:Plugin must run inside a plugin|Extension must run inside an extension) contribution[`'"]\)/g),
-    Tooltip: component("Tooltip", "`triggerTabIndex`"),
     IconButton: component("IconButton", '"data-component":`icon-button-v2`'),
     Button: component("Button", '"data-component":`button-v2`'),
     Icon: find("Icon", /function\s+([\w$]+)\([\w$]+\)\{let\[[\w$]+,[\w$]+\]=[\w$]+\([\w$]+,\[`name`,`size`\]\)/g),
     showToast: find("showToast", /function\s+([\w$]+)\([\w$]+\)\{[^{}]{0,150}\{description:[\w$]+\}[^{}]{0,150}\{title:[\w$]+\.title,description:/g),
   };
-  const routeImportBlock = route.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/)?.[1] || "";
-  const routeImports = new Map(routeImportBlock.split(",").map(part => {
-    const [external, local = external] = part.trim().split(/\s+as\s+/);
-    return [local, external];
-  }));
-  symbols.For = routeImports.get(route.match(/([\w$]+),\{get each\(\)/)?.[1]);
-  if (!symbols.For) throw new Error("无法安全解析 For，未写入补丁。");
+  symbols.Tooltip = resolveTooltipSymbol(main, symbols.createComponent, symbols.Show);
   // New releases inline Markdown and TextShimmer into main instead of chunks.
   const imports = panel.match(/import\{([^}]+)\}from["']\.\/main-[^"']+["']/)?.[1] || "";
   const panelImports = new Map(imports.split(",").map(part => {
@@ -52,11 +69,31 @@ export function resolvePanelSymbols(panel, route, main) {
     return [local, external];
   }));
   for (const [label, pattern] of [
-    ["Markdown", /[\w$]+\(([\w$]+),\{get text\(\)\{return [\w$]+\(\)\},class:`text-14-regular`/],
+    ["Markdown", /[\w$]+\(([\w$]+),\{get text\(\)\{return [\w$]+\(\)(?:\.answer)?\},class:`text-14-regular`/],
     ["TextShimmer", /[\w$]+\(([\w$]+),\{get text\(\)\{return [\w$]+\.t\(`session\.timeline\.working`\)/],
   ]) {
     const external = panelImports.get(panel.match(pattern)?.[1]);
-    if (external) symbols[label] = external;
+    if (external) {
+      if (![...exports.values()].includes(external)) throw new Error(`${label} 未从主模块导出，未写入补丁。`);
+      symbols[label] = external;
+    }
   }
   return symbols;
+}
+
+export function resolvePanelChunkImport(panel, label) {
+  const pattern = label === "Markdown"
+    ? /[\w$]+\(([\w$]+),\{get text\(\)\{return [\w$]+\(\)(?:\.answer)?\},class:`text-14-regular`/g
+    : /[\w$]+\(([\w$]+),\{get text\(\)\{return [\w$]+\.t\(`session\.timeline\.working`\)/g;
+  const locals = [...new Set([...panel.matchAll(pattern)].map(match => match[1]))];
+  if (locals.length !== 1) throw new Error(`无法安全解析 ${label} 调用，未写入补丁。`);
+  const candidates = [];
+  for (const match of panel.matchAll(/import\{([^}]+)\}from["']\.\/([^"']+)["']/g)) {
+    for (const entry of match[1].split(",")) {
+      const [external, local = external] = entry.trim().split(/\s+as\s+/);
+      if (local === locals[0] && !/^main-/.test(match[2])) candidates.push({ file: match[2], external });
+    }
+  }
+  if (candidates.length !== 1) throw new Error(`无法安全解析 ${label} 模块导入，未写入补丁。`);
+  return candidates[0];
 }

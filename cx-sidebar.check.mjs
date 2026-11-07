@@ -144,6 +144,49 @@ assert.equal(intervals.size, 0);
 for (const name of ["focus", "blur", "storage"]) assert.equal(getEventListeners(sandbox.window, name).length, 0);
 for (const name of ["pointerdown", "keydown", "visibilitychange"]) assert.equal(getEventListeners(sandbox.document, name).length, 0);
 
+// 2.2.6 removed ensureServerCtx/local from Global. Exercise the real adapter,
+// not just a mount stub, including asynchronous context creation/reconnection.
+{
+  const modernHost = makeHost();
+  const conn = { key: "modern" };
+  let ready = false, requested = 0, modernCurrent;
+  const ctxKeys = [], modernTabs = [];
+  const modernProjects = [{ id: "m1", worktree: "/modern", name: "Modern project", sandboxes: [] }];
+  const modernHistory = [{ id: "modern-session", title: "Recovered session", projectID: "m1", location: { directory: "/modern" }, time: { created: 5 } }];
+  const modernCtx = {
+    ...ctx, isLocal: true,
+    projects: { list: () => modernProjects, used: () => modernProjects },
+    data: { session: { ...ctx.data.session, list: () => [] } },
+    sdk: { connection: { status: () => "connected" }, api: { session: { list: async () => { requested++; return { data: modernHistory, cursor: {} }; } } } },
+  };
+  const modernDispose = sandbox.mount(modernHost, {
+    ...deps, tabs: modernTabs, current: () => modernCurrent,
+    servers: { servers: { list: () => [conn] }, serverCtx(key) {
+      assert.equal(key, "modern", "serverCtx receives the computed key, never the connection object");
+      ctxKeys.push(key); return ready ? modernCtx : undefined;
+    } },
+    tabsStore: { addSessionTab(tab) { const next = { type: "session", ...tab }; modernTabs.push(next); return next; }, select(tab) { modernCurrent = tab; } },
+  });
+  await new Promise(setImmediate);
+  assert.equal(modernHost.paints.at(-1).projs.length, 0);
+  ready = true;
+  await modernHost.check.refresh();
+  const project = modernHost.paints.at(-1).projs.find(p => p.worktree === "/modern");
+  assert.ok(project, "Projects must recover when Global finishes creating the context");
+  assert.equal(project.name, "Modern project");
+  assert.equal(project.sessions[0].id, "modern-session", "Load real history via the new context");
+  assert.equal(modernHost.check.state().snap.servers[0].name, "Local");
+  modernHost.check.api.openSession("modern", "modern-session", "/modern");
+  assert.equal(modernCurrent.sessionId, "modern-session");
+  ready = false;
+  assert.equal(modernHost.check.api.snapshot().servers.length, 0, "Do not cache a disposed context");
+  ready = true;
+  assert.equal(modernHost.check.api.snapshot().servers[0].projects[0].worktree, "/modern");
+  assert.ok(requested > 0 && ctxKeys.length > 2);
+  modernDispose();
+  assert.equal(intervals.size, 0);
+}
+
 // Optionally exercise the emitted hook with the exact Solid runtime shipped in OpenCode 2.1.3.
 // Run: node cx-sidebar.check.mjs <path-to-app.asar.bak>
 if (process.argv[2]) {

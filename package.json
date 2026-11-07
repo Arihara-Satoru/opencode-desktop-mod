@@ -8,7 +8,7 @@
     "opencode-desktop-mod": "./apply-mod.mjs"
   },
   "scripts": {
-    "test": "node bundle.check.mjs && node selection-quote.check.mjs && node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs",
+    "test": "node bundle.check.mjs && node --experimental-vm-modules module-link.check.mjs && node launcher.check.mjs && node selection-quote.check.mjs && node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs",
     "apply": "node apply-mod.mjs",
     "restore": "node apply-mod.mjs --restore"
   },

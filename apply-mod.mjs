@@ -41,7 +41,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
-import { resolvePanelSymbols } from "./bundle-symbols.mjs";
+import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
@@ -339,45 +339,52 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   }
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
-  const propPattern = /\{orientation:[`'"]vertical[`'"],tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
+  const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
   const propMatch = out.match(propPattern);
   let vTabsInjected = false;
   if (propMatch) {
     const prefixSlice = out.slice(Math.max(0, propMatch.index - 500), propMatch.index);
-    const startMatch = [...prefixSlice.matchAll(/([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,/g)].pop();
+    let startMatch = [...prefixSlice.matchAll(/([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,/g)].pop();
+    // 2.2.6 selects inbox/projects/flat tabs inside a dedicated sidebar host.
+    const containers = [...out.matchAll(/\(\(\)=>\{var ([\w$]+)=([\w$]+)\(\);return ([\w$]+)\(\1,([\w$]+\([\w$]+,\{get when\(\)\{return [\w$]+\.appearance\.tabLayout\(\)===`inbox`\},get fallback\(\)\{return [\s\S]{0,600}?\.general\.sidebarOrganize\(\)===`projects`[\s\S]{0,600}?)\)\),\1\}\)\(\)/g)];
+    if (containers.length > 1) throw new Error("无法唯一定位桌面侧边栏容器，未写入补丁。");
+    const container = containers[0];
+    if (container) startMatch = ["", "", container[1], container[2], container[3]];
     if (startMatch) {
-      const fullStart = propMatch.index - prefixSlice.length + startMatch.index;
+      const fullStart = container ? container.index : propMatch.index - prefixSlice.length + startMatch.index;
       const afterSlice = out.slice(propMatch.index, propMatch.index + 800);
-      const endMatch = afterSlice.match(new RegExp(`\\),${startMatch[2]}\\}\\)\\(\\)`));
+      const endMatch = container || afterSlice.match(new RegExp(`\\),${startMatch[2]}\\}\\)\\(\\)`));
       if (endMatch) {
-        const fullEnd = propMatch.index + endMatch.index + endMatch[0].length;
+        const fullEnd = container ? container.index + container[0].length : propMatch.index + endMatch.index + endMatch[0].length;
         const fullBlock = out.slice(fullStart, fullEnd);
 
         const prefixFn = startMatch[1];
         const cVar = startMatch[2];
         const hVar = startMatch[3];
         const insFn = startMatch[4];
-        const origExpr = fullBlock.slice(startMatch[0].length, fullBlock.length - endMatch[0].length);
-        const crComp = origExpr.match(/^([a-zA-Z0-9_$]+)\(/)?.[1] || "F";
+        const origExpr = container ? container[4] + ")" : fullBlock.slice(startMatch[0].length, fullBlock.length - endMatch[0].length);
+        const crComp = origExpr.match(/^([a-zA-Z0-9_$]+)\(/)?.[1];
 
         const props = propMatch[0];
         const tabsVar = propMatch[1];
         const currentTabFn = propMatch[2];
-        const tabsStoreVar = props.match(/onNavigate:\s*\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\s*=>\s*\{([a-zA-Z0-9_$]+)\.select/)?.[1] || "d";
-        const tabKeyFn = props.match(/findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)===\1\(/)?.[1] || "AR";
+        const tabsStoreVar = props.match(/onNavigate:\s*\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)\s*=>\s*\{(?:[\w$]+\?\.\(\),)?([a-zA-Z0-9_$]+)\.select/)?.[1];
+        const tabKeyFn = props.match(/findIndex\([a-zA-Z0-9_$]+=>([a-zA-Z0-9_$]+)\([a-zA-Z0-9_$]+\)===\1\(/)?.[1];
 
         const sliceBefore = out.slice(Math.max(0, fullStart - 12000), fullStart);
         const srvListMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.servers\.list\(\)/);
-        const serversVar = srvListMatch ? srvListMatch[1] : "s";
+        const serversVar = srvListMatch?.[1];
         const srvKeyMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.key\([a-zA-Z0-9_$]+\)/);
-        const serverKeyObj = srvKeyMatch ? srvKeyMatch[1] : "Q";
+        const serverKeyObj = srvKeyMatch?.[1];
+        if (!crComp || !tabKeyFn || !tabsStoreVar || !serversVar || !serverKeyObj) throw new Error("无法安全解析桌面侧边栏依赖，未写入补丁。");
 
         const settingsHookMatch = src.match(/var\{use:([a-zA-Z0-9_$]+),provider:([a-zA-Z0-9_$]+)\}=([a-zA-Z0-9_$]+)\(\{name:[`'"]SettingsSurface[`'"]/);
-        const settingsHook = settingsHookMatch ? settingsHookMatch[1] : "RU";
-        const settingsProvider = settingsHookMatch ? settingsHookMatch[2] : "zU";
+        if (!settingsHookMatch) throw new Error("无法安全解析桌面侧边栏设置接口，未写入补丁。");
+        const settingsHook = settingsHookMatch[1];
+        const settingsProvider = settingsHookMatch[2];
 
         const replacement = [
-          `${prefixFn}(),(()=>{`,
+          `${prefixFn ? prefixFn + "()," : ""}(()=>{`,
           `var ${cVar}=${hVar}(),orig=${origExpr},host=document.createElement('div'),origWrap=document.createElement('div');`,
           "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
           "origWrap.style.display='none';",
@@ -679,29 +686,17 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
   if (symbols.Markdown) customPanelSrc = customPanelSrc.replace(/import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["'];?/, "");
   if (symbols.TextShimmer) customPanelSrc = customPanelSrc.replace(/import\s*\{[^}]*\}\s*from\s*["']\.\/text-shimmer-[^"']+["'];?/, "");
 
-  // Extract the exact markdown and text-shimmer chunks used by the target panel
-  const mdMatch = origPanelSrc.match(/from\s*["']\.\/(markdown-[^"']+)["']/);
-  const shMatch = origPanelSrc.match(/from\s*["']\.\/(text-shimmer-[^"']+)["']/);
-  const markdownFileName =
-    mdMatch?.[1] ||
-    Object.keys(assetsMap).find((k) => /^markdown-[A-Za-z0-9_-]+\.js$/.test(k)) ||
-    "markdown.js";
-  const shimmerFileName =
-    shMatch?.[1] ||
-    Object.keys(assetsMap).find((k) => /^text-shimmer-[A-Za-z0-9_-]+\.js$/.test(k)) ||
-    "text-shimmer.js";
-  if ((!symbols.Markdown && !assetsMap[markdownFileName]) || (!symbols.TextShimmer && !assetsMap[shimmerFileName])) {
-    throw new Error("无法定位 Markdown / TextShimmer 导出或模块，未写入补丁。");
+  // Follow the native component call/import, never a similarly named syntax
+  // grammar asset. Both component chunks and their export aliases can change.
+  for (const [label, chunkPattern] of [
+    ["Markdown", /import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["']/],
+    ["TextShimmer", /import\s*\{[^}]*\}\s*from\s*["']\.\/text-shimmer-[^"']+["']/],
+  ]) {
+    if (symbols[label]) continue;
+    const dependency = resolvePanelChunkImport(origPanelSrc, label);
+    if (!assetsMap[dependency.file]) throw new Error(`缺少 ${label} 模块，未写入补丁。`);
+    customPanelSrc = customPanelSrc.replace(chunkPattern, `import { ${dependency.external} as ${label} } from "./${dependency.file}"`);
   }
-
-  customPanelSrc = customPanelSrc.replace(
-    /import\s*\{[^}]*\}\s*from\s*["']\.\/markdown-[^"']+["']/,
-    `import { t as Markdown } from "./${markdownFileName}"`
-  );
-  customPanelSrc = customPanelSrc.replace(
-    /import\s*\{[^}]*\}\s*from\s*["']\.\/text-shimmer-[^"']+["']/,
-    `import { t as TextShimmer } from "./${shimmerFileName}"`
-  );
 
   const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");

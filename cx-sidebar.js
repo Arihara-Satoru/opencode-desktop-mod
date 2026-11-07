@@ -1181,6 +1181,9 @@ export function mount(host, deps) {
     if (!sv) return null;
     srvOf.set(key, sv);
     try {
+      // 2.2.6 owns context lifecycle in Global; look up by server key and retry
+      // on later polls while it connects. Older versions accept the connection.
+      if (typeof deps.servers.serverCtx === "function") return deps.servers.serverCtx(key) ?? null;
       return deps.servers.ensureServerCtx(sv);
     } catch {
       return null;
@@ -1188,7 +1191,8 @@ export function mount(host, deps) {
   };
   const srvName = (sv, key) => {
     try {
-      return sv.name || (deps.servers.local(sv) ? "Local" : key);
+      const isLocal = ctxOf(key)?.isLocal ?? deps.servers.local?.(sv);
+      return sv.name || (isLocal ? "Local" : key);
     } catch {
       return key;
     }
