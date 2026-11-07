@@ -23,6 +23,9 @@
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
  * 5. Long text attachments and collapsible user messages (长文本附件与显示更多)
  *    - Native prompt serialization, lossless UTF-8 attachment, 12-line preview
+ * 6. Message Generation Speed & Token Metrics in Footer (消息生成速度与 Token 详情)
+ *    - Real-time model throughput in T/s (tokens/sec) beside message duration
+ *    - Hover tooltip displaying full token breakdown (output + reasoning) and duration
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
@@ -481,6 +484,31 @@ function patchSessionRouteBundle(src) {
   if (!revealMatch[0].startsWith(revealStart)) throw new Error("Could not locate virtual-scroll insertion point.");
   // Insert at the matched position, never a hardcoded pair of minified params.
   out = out.slice(0, revealMatch.index) + bridge + out.slice(revealMatch.index);
+
+  // 4. Inject token generation speed (T/s) and tooltip in assistant message footer
+  const durationPattern = /([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\(\)=>\{let ([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\.message\.time\.completed,([a-zA-Z0-9_$]+)=\4\.turnDurationMs===null\?-1:\4\.turnDurationMs===void 0\?\3===void 0\?-1:\3-\4\.message\.time\.created:\4\.turnDurationMs;if\(!\(\5>=0\)\)return``;let ([a-zA-Z0-9_$]+)=Math\.round\(\5\/1e3\);return \6<60\?([a-zA-Z0-9_$]+)\.t\([`'"]ui\.message\.duration\.seconds[`'"],\{count:([a-zA-Z0-9_$]+)\(\)\.format\(\6\)\}\):\7\.t\([`'"]ui\.message\.duration\.minutesSeconds[`'"],\{minutes:\8\(\)\.format\(Math\.floor\(\6\/60\)\),seconds:\8\(\)\.format\(\6%60\)\}\)\}\)/;
+  const durMatch = out.match(durationPattern);
+  if (durMatch) {
+    const [matchedStr, uVar, createMemoFn, completedVar, ePropsVar, durationVar, secondsVar, i18nVar] = durMatch;
+    const flatMapPattern = new RegExp(`\\[${uVar}\\(\\),([a-zA-Z0-9_$]+)\\(\\)\\?${i18nVar}\\.t\\([\`'"]ui\\.message\\.interrupted[\`'"]\\):[\`'"][\`'"]\\]\\.flatMap\\(([a-zA-Z0-9_$]+)=>\\2\\?\\[\\{label:\\2\\}\\]:\\[\\]\\)`);
+    const flatMatch = out.match(flatMapPattern);
+    if (flatMatch) {
+      const [matchedFlat, interruptedVar, itemVar] = flatMatch;
+      const speedVar = "__oc_speed";
+      const speedMemo = `${speedVar}=${createMemoFn}(()=>{let m=${ePropsVar}.message;if(!m?.tokens)return"";let k=(m.tokens.output??0)+(m.tokens.reasoning??0);if(k<=0)return"";let d=(m.time?.streamed??m.time?.completed??0)-(m.time?.created??0);if(d<=0)return"";let s=k/(d/1e3);if(!Number.isFinite(s)||s<=0)return"";let isZh=${i18nVar}?.locale?.().startsWith("zh");let title=isZh?(m.tokens.reasoning?\`\${k} tokens (\${m.tokens.output??0} 输出 + \${m.tokens.reasoning} 思考) / \${(d/1e3).toFixed(1)} 秒\`:\`\${k} tokens / \${(d/1e3).toFixed(1)} 秒\`):(m.tokens.reasoning?\`\${k} tokens (\${m.tokens.output??0} out + \${m.tokens.reasoning} reasoning) / \${(d/1e3).toFixed(1)}s\`:\`\${k} tokens / \${(d/1e3).toFixed(1)}s\`);return{label:\`\${s>=100?Math.round(s):s.toFixed(1)} T/s\`,title}}),`;
+      out = out.replace(matchedStr, `${matchedStr},${speedMemo.slice(0, -1)}`);
+      const newFlat = `[${uVar}(),${speedVar}(),${interruptedVar}()?${i18nVar}.t(\`ui.message.interrupted\`):\`\`].flatMap(${itemVar}=>${itemVar}?[typeof ${itemVar}===\`string\`?{label:${itemVar}}:${itemVar}]:[])`;
+      out = out.replace(matchedFlat, newFlat);
+
+      const wsPartMatch = out.match(/q\(([a-zA-Z0-9_$]+),\(\)=>([a-zA-Z0-9_$]+)\.label\),([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)=>\{var [a-zA-Z0-9_$]+=`\$\{[a-zA-Z0-9_$]+\.slot\}-meta-item`[^}]*?&&([a-zA-Z0-9_$]+)\(\1,`data-slot`/);
+      if (wsPartMatch) {
+        const [origWsSnippet, nVar, tVar, kVar, rVar, rSetAttr] = wsPartMatch;
+        const targetToReplace = `q(${nVar},()=>${tVar}.label)`;
+        const newSnippet = `${targetToReplace},${tVar}.title&&${rSetAttr}(${nVar},\`title\`,${tVar}.title)`;
+        out = out.replace(origWsSnippet, origWsSnippet.replace(targetToReplace, newSnippet));
+      }
+    }
+  }
 
   // Leave native message actions (including fork) and the copy footer untouched.
   return out;

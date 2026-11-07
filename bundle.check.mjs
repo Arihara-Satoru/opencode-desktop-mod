@@ -65,6 +65,37 @@ assert.throws(() => patchRoute(routeFixtureV225 + routeFixtureV225), /virtual|re
 assert.throws(() => patchRoute(routeFixtureV225.replace("clearAnchor(),", "")), /virtual|flusher|reveal/i, "Never guess a missing flusher name");
 assert.throws(() => patchRoute(routeFixtureV225 + 'other.setRevealMessage?.((id)=>jump(id))'), /virtual|reveal/i, "Reject additional unknown reveal callbacks, not known no-op cleanup");
 
+// Verify assistant message footer speed patch (T/s) and tooltip
+const pcFixture = 'function pc(e){let n=Xi(),r=at(),i=m(),a=t(()=>new Intl.NumberFormat(r.locale())),o=!1;u=t(()=>{let t=e.message.time.completed,n=e.turnDurationMs===null?-1:e.turnDurationMs===void 0?t===void 0?-1:t-e.message.time.created:e.turnDurationMs;if(!(n>=0))return``;let i=Math.round(n/1e3);return i<60?r.t(`ui.message.duration.seconds`,{count:a().format(i)}):r.t(`ui.message.duration.minutesSeconds`,{minutes:a().format(Math.floor(i/60)),seconds:a().format(i%60)})}),d=Ir(`(max-width: 767px)`),f=t(()=>[...d()?[]:l(),...[u(),c()?r.t(`ui.message.interrupted`):``].flatMap(e=>e?[{label:e}]:[])])}function Ws(e){return W(H,{get each(){return e.items},children:(t,n)=>[q(n,()=>t.label),K(r=>{var i=`${e.slot}-meta-item`,a=t.variant?``:void 0,o=e.slot===`text-part`?`auto`:void 0;return i!==r.e&&R(n,`data-slot`,r.e=i),r},{e:void 0})])]})}';
+const patchedRouteWithSpeed = patchRoute(routeFixtureV225 + pcFixture);
+assert.ok(patchedRouteWithSpeed.includes("__oc_speed="), "Speed memo must be emitted");
+assert.ok(patchedRouteWithSpeed.includes("[u(),__oc_speed(),"), "Speed memo must be included after duration");
+assert.ok(patchedRouteWithSpeed.includes(".title&&R("), "Ws must bind title attribute for token details tooltip");
+
+// Execute speed calculation in sandbox
+const speedSnippet = patchedRouteWithSpeed.match(/__oc_speed=t\(\(\)=>\{([\s\S]*?)\}\),/);
+assert.ok(speedSnippet, "Extract speed memo body");
+function evalSpeed(message, locale = "zh-CN") {
+  return vm.runInNewContext(`(() => { let e = { message }; let r = { locale: () => "${locale}" }; ${speedSnippet[1]} })()`, { Number, Math, message });
+}
+const geminiSpeed = evalSpeed({
+  time: { created: 10000, streamed: 22682 },
+  tokens: { output: 283, reasoning: 519 }
+});
+assert.equal(geminiSpeed.label, "63.2 T/s");
+assert.ok(geminiSpeed.title.includes("802 tokens (283 输出 + 519 思考) / 12.7 秒"));
+
+const enSpeed = evalSpeed({
+  time: { created: 10000, completed: 12500 },
+  tokens: { output: 150 }
+}, "en-US");
+assert.equal(enSpeed.label, "60.0 T/s");
+assert.ok(enSpeed.title.includes("150 tokens / 2.5s"));
+
+assert.equal(evalSpeed({ tokens: undefined }), "");
+assert.equal(evalSpeed({ tokens: { output: 0 } }), "");
+
+
 async function checkCompanionSetup(main, panelName) {
   const start = main.indexOf("=e=>{window.__oc_app_ext=e;") + 1;
   assert.ok(start > 0, "Find the emitted companion setup");
