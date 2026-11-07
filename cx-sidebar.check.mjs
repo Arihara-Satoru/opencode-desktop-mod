@@ -123,6 +123,13 @@ paints = host.paints.length;
 await check.poll(true);
 assert.equal(host.paints.length, paints + 1, "Explicit UI actions can still request a rebuild");
 
+// Test hidden projects and deletion
+await check.api.closeProject("local", "/one", false);
+assert.ok(check.state().ui.hiddenProjects.includes("local\0/one"), "Project added to hiddenProjects");
+check.state().ui.hiddenProjects = check.state().ui.hiddenProjects.filter((k) => k !== "local\0/one");
+assert.equal(check.state().ui.hiddenProjects.length, 0, "Project can be removed from hiddenProjects");
+await check.poll(true);
+
 const secondDispose = sandbox.mount(host, deps);
 await new Promise(setImmediate);
 assert.equal(intervals.size, 1, "Remounting a host must dispose its previous instance");

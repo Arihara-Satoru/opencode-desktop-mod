@@ -39,6 +39,9 @@ const STRINGS = {
     restoreProjects: "恢复已移除的项目",
     hiddenTag: "已隐藏",
     restoreAll: "全部恢复",
+    deleteHiddenRecord: "彻底删除记录",
+    clearAllHidden: "清空已隐藏记录…",
+    confirmClearAllHidden: (n) => `确认清空全部 ${n} 个已隐藏项目`,
   },
   en: {
     projects: "Projects",
@@ -70,6 +73,9 @@ const STRINGS = {
     restoreProjects: "Restore removed projects",
     hiddenTag: "hidden",
     restoreAll: "Restore all",
+    deleteHiddenRecord: "Delete permanently",
+    clearAllHidden: "Clear hidden list…",
+    confirmClearAllHidden: (n) => `Confirm clear all ${n} hidden projects`,
   },
 };
 let L = STRINGS.en;
@@ -181,6 +187,10 @@ function injectStyle() {
 .oc-cx-pop button:hover{background:var(--v2-background-bg-layer-01,rgba(128,128,128,.12))}
 .oc-cx-pop button[disabled]{opacity:.4;pointer-events:none}
 .oc-cx-pop button.is-danger{color:#e5484d}
+.oc-cx-pop button .oc-cx-grow{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-cx-pop-del{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;color:var(--v2-text-text-muted);opacity:0;transition:opacity .15s,color .15s,background .15s;flex-shrink:0;margin-left:6px}
+.oc-cx-pop button:hover .oc-cx-pop-del,.oc-cx-pop-del:focus-visible{opacity:.75}
+.oc-cx-pop-del:hover{opacity:1 !important;color:#e5484d !important;background:rgba(229,72,77,.15)}
 .oc-cx-pop hr{border:0;border-top:1px solid var(--v2-border-border-muted,rgba(128,128,128,.22));margin:6px 4px}
 .oc-cx-card{width:300px;padding:10px 12px;border-radius:16px}
 .oc-cx-card-r{display:flex;align-items:center;gap:10px;min-height:30px;padding:0 4px;color:var(--v2-text-text-muted,inherit)}
@@ -307,7 +317,8 @@ function mountUi(host, api) {
             {
               role: "menuitem",
               disabled: it.disabled,
-              class: it.danger ? "is-danger" : "",
+              class: (it.danger ? "is-danger" : "") + (it.onDelete ? " has-del" : ""),
+              title: it.title || "",
               onclick: (e) => {
                 e.stopPropagation();
                 closePopup();
@@ -316,7 +327,30 @@ function mountUi(host, api) {
               },
             },
             it.icon ? h("span", { class: "oc-cx-ico", html: icon(it.icon, 15) }) : null,
-            it.label,
+            h("span", { class: "oc-cx-grow" }, it.label),
+            it.onDelete
+              ? h(
+                  "span",
+                  {
+                    class: "oc-cx-pop-del",
+                    role: "button",
+                    tabindex: "0",
+                    title: it.delTitle || "",
+                    onclick: (e) => {
+                      e.stopPropagation();
+                      it.onDelete();
+                    },
+                    onkeydown: (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        it.onDelete();
+                      }
+                    },
+                  },
+                  h("span", { class: "oc-cx-ico", html: icon("x", 13) }),
+                )
+              : null,
           ),
         );
       }
@@ -455,21 +489,45 @@ function mountUi(host, api) {
 
   const openProjectsMenu = (anchor) => {
     const hiddenList = state.ui.hiddenProjects || [];
-    if (!hiddenList.length) return;
+    if (!hiddenList.length) {
+      closePopup();
+      return;
+    }
     const items = [
       { label: L.restoreProjects, disabled: true },
       { sep: true },
       ...hiddenList.map((key) => {
         const parts = key.split("\u0000");
+        const srv = parts[0];
         const wt = parts[1] || key;
         const name = baseName(wt);
         return {
           label: `${name}`,
           icon: "folder",
+          title: wt,
+          delTitle: L.deleteHiddenRecord,
           onClick: () => {
             state.ui.hiddenProjects = state.ui.hiddenProjects.filter((k) => k !== key);
+            try {
+              const ctx = ctxOf(srv);
+              ctx?.projects.touch?.(wt);
+            } catch {}
             saveUi();
             poll(true);
+          },
+          onDelete: () => {
+            state.ui.hiddenProjects = state.ui.hiddenProjects.filter((k) => k !== key);
+            try {
+              const ctx = ctxOf(srv);
+              ctx?.projects.hide?.({ worktree: wt });
+            } catch {}
+            saveUi();
+            poll(true);
+            if (state.ui.hiddenProjects.length > 0) {
+              openProjectsMenu(anchor);
+            } else {
+              closePopup();
+            }
           },
         };
       }),
@@ -478,10 +536,46 @@ function mountUi(host, api) {
         label: L.restoreAll,
         icon: "folderOpen",
         onClick: () => {
+          for (const key of state.ui.hiddenProjects) {
+            const parts = key.split("\u0000");
+            const srv = parts[0];
+            const wt = parts[1] || key;
+            try {
+              const ctx = ctxOf(srv);
+              ctx?.projects.touch?.(wt);
+            } catch {}
+          }
           state.ui.hiddenProjects = [];
           saveUi();
           poll(true);
         },
+      },
+      {
+        label: L.clearAllHidden,
+        icon: "x",
+        danger: true,
+        onClick: () => [
+          {
+            label: L.confirmClearAllHidden(hiddenList.length),
+            icon: "x",
+            danger: true,
+            onClick: () => {
+              for (const key of state.ui.hiddenProjects) {
+                const parts = key.split("\u0000");
+                const srv = parts[0];
+                const wt = parts[1] || key;
+                try {
+                  const ctx = ctxOf(srv);
+                  ctx?.projects.hide?.({ worktree: wt });
+                } catch {}
+              }
+              state.ui.hiddenProjects = [];
+              saveUi();
+              poll(true);
+            },
+          },
+          { label: L.cancel },
+        ],
       },
     ];
     openMenu(anchor, items, anchor);
@@ -1136,7 +1230,8 @@ export function mount(host, deps) {
       if (!ctx) continue;
       let projects = [];
       try {
-        projects = (ctx.projects.list() || []).map((p) => ({
+        const listFn = ctx.projects.used || ctx.projects.list;
+        projects = (listFn ? listFn.call(ctx.projects) : []).map((p) => ({
           id: p.id,
           worktree: p.worktree,
           name: p.name,
@@ -1285,7 +1380,8 @@ export function mount(host, deps) {
         }
       }
       try {
-        ctx?.projects.close(worktree);
+        ctx?.projects.hide?.({ worktree });
+        ctx?.projects.close?.(worktree);
       } catch {}
       try {
         for (let i = deps.tabs.length - 1; i >= 0; i--) {
