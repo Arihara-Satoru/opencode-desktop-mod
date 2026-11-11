@@ -20,7 +20,11 @@ for (const name of ["应用桌面端补丁.cmd", "还原官方原版.cmd"]) {
       assert.equal(result.status, code, `${name}: preserve failure exit status`);
       assert.match(result.stdout, /stub-launcher/);
       assert.doesNotMatch(result.stderr, /not recognized|不是内部或外部命令/i);
-      if (code) assert.match(result.stdout, /\[Failed\]/);
+      if (code) {
+        assert.match(result.stdout, /\[Failed\]/);
+        assert.doesNotMatch(result.stdout, /\[EBUSY\]/, "Do not misdiagnose every installer failure as a locked file");
+        assert.match(result.stdout, /For file-lock errors \(EBUSY\/EPERM\)/);
+      }
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

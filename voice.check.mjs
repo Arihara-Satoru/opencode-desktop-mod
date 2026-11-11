@@ -373,7 +373,10 @@ if (testAsar) {
   const dir = fs.mkdtempSync(path.join(parent, "voice-check-"));
   try {
     const target = path.join(dir, "app.asar"); fs.copyFileSync(testAsar, target);
-    const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], { cwd: import.meta.dirname, env: { ...process.env, OPENCODE_ASAR_PATH: target }, encoding: "utf8" });
+    const configDirectory = path.join(dir, "isolated-config");
+    const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], { cwd: import.meta.dirname,
+      env: { ...process.env, OPENCODE_ASAR_PATH: target, OPENCODE_CONFIG_DIR: configDirectory,
+        OPENCODE_MOD_CONFIG_PATH: path.join(configDirectory, "opencode.jsonc") }, encoding: "utf8" });
     console.log(apply());
     const first = fs.readFileSync(target);
     apply(); assert.deepEqual(fs.readFileSync(target), first, "Packaging is idempotent");

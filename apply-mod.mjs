@@ -23,11 +23,14 @@
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
  * 5. Long text attachments and collapsible user messages (长文本附件与显示更多)
  *    - Native prompt serialization, lossless UTF-8 attachment, 12-line preview
+ * 6. Offline persistent goals on 2.2.7+ (持续目标，无独立服务或 npm 安装)
+ *    - Prebuilt native server/GUI plugin deployed with the desktop patch
  *
  * Usage:
  *   node apply-mod.mjs            # Apply patch to OpenCode Desktop app.asar
  *   node apply-mod.mjs --restore  # Restore official app.asar from backup
  *   node apply-mod.mjs --force    # Bypass running process check (restart app manually)
+ *   node apply-mod.mjs --goals-config <file> # Select between multiple global configs
  */
 
 import fs from "node:fs";
@@ -39,6 +42,9 @@ import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
+import { prepareGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
+import { patchGoalComposer } from "./goal-composer-patch.mjs";
+import { writeDesktopPatch } from "./desktop-install.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const customPanelPath = path.join(__dirname, "panel-c7bWJg2T.js");
@@ -484,6 +490,9 @@ function patchSessionRouteBundle(src) {
 function main() {
   const args = process.argv.slice(2);
   const force = args.includes("--force") || args.includes("-f");
+  const goalsConfigFlag = args.indexOf("--goals-config");
+  if (goalsConfigFlag >= 0 && (!args[goalsConfigFlag + 1] || args[goalsConfigFlag + 1].startsWith("--"))) throw new Error("--goals-config 后需要明确的配置路径。");
+  const goalsConfig = goalsConfigFlag >= 0 ? path.resolve(args[goalsConfigFlag + 1]) : undefined;
   const asarPath = resolveAsarPath();
   const bakPath = `${asarPath}.bak`;
 
@@ -506,8 +515,10 @@ function main() {
       console.error(`[restore] 未找到备份文件：${bakPath}`);
       process.exit(1);
     }
-    fs.copyFileSync(bakPath, asarPath);
+    const goals = prepareGoals({ uninstall: true, configFile: goalsConfig });
+    writeDesktopPatch(asarPath, fs.readFileSync(bakPath), goals);
     console.log(`[restore] 成功从官方备份恢复：${bakPath} -> ${asarPath}`);
+    console.log(`[restore] 已撤销本补丁登记的目标功能；保留目标、会话及代码。`);
     console.log(`[restore] 请启动 OpenCode 桌面端。`);
     return;
   }
@@ -657,7 +668,7 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     customPanelSrc = customPanelSrc.replace(chunkPattern, `import { ${dependency.external} as ${label} } from "./${dependency.file}"`);
   }
 
-  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols), "utf8");
+  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\nimport "./goal-composer.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols), "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
@@ -677,9 +688,12 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
   });
   if (composerFiles.length !== 1) throw new Error(`无法唯一定位原生输入模块（匹配 ${composerFiles.length} 处），未写入补丁。`);
   const composerFileName = composerFiles[0];
+  let composerSource = patchLongTextComposer(readFileFromAsar(payload, assetsMap[composerFileName]).toString("utf8"));
+  if (supportsGoals(targetVersion)) composerSource = patchGoalComposer(composerSource, symbols);
   const longTextFiles = [
     [assetsMap, "long-text.mjs", fs.readFileSync(path.join(__dirname, "long-text.mjs"))],
-    [assetsMap, composerFileName, Buffer.from(patchLongTextComposer(readFileFromAsar(payload, assetsMap[composerFileName]).toString("utf8")))],
+    [assetsMap, "goal-composer.mjs", fs.readFileSync(path.join(__dirname, "goal-composer.mjs"))],
+    [assetsMap, composerFileName, Buffer.from(composerSource)],
   ];
   console.log(`[patch] 长文本附件与折叠模块: ${composerFileName}`);
 
@@ -729,7 +743,13 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     ...patchedFiles.map(([, , buffer]) => buffer),
   ]);
 
-  fs.writeFileSync(asarPath, finalAsarBuf);
+  const goals = prepareGoals({ version: targetVersion, configFile: goalsConfig });
+  writeDesktopPatch(asarPath, finalAsarBuf, goals, curRawAsar);
+  if (goals.supported) {
+    console.log(`[patch] 持续目标 /goal 已随补丁部署：${goals.pluginDirectory}`);
+    console.log(`[patch] 目标功能使用 OpenCode 自带服务，无需独立启动、安装 npm 依赖或保留源码路径。`);
+    if (goals.backup) console.log(`[patch] 目标配置备份：${goals.backup}`);
+  } else console.log(`[patch] v${targetVersion} 不支持目标接口，保留原有增强；/goal 需要 2.2.7+。`);
   console.log(`\n[patch] 成功完成补丁写入！`);
   console.log(`[patch] 目标文件：${asarPath} (${finalAsarBuf.length} 字节)`);
   console.log(`[patch] 官方原版备份保留在：${bakPath}`);

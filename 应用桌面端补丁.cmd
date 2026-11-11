@@ -24,7 +24,7 @@ exit /b 1
 :mod_fail
 echo.
 echo [Failed] Patch was not applied. See the error above.
-echo [EBUSY] Please fully exit OpenCode Desktop, then try again.
+echo [Hint] For file-lock errors ^(EBUSY/EPERM^), fully exit OpenCode Desktop first.
 echo.
 pause
 exit /b 1

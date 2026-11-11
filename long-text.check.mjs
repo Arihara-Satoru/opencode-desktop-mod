@@ -389,7 +389,8 @@ if (asarIndex >= 0) {
     fs.copyFileSync(process.argv[asarIndex + 1], target);
     const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], {
       cwd: path.dirname(fileURLToPath(import.meta.url)),
-      env: { ...process.env, OPENCODE_ASAR_PATH: target }, encoding: "utf8",
+      env: { ...process.env, OPENCODE_ASAR_PATH: target, OPENCODE_CONFIG_DIR: path.join(dir, "isolated-config"),
+        OPENCODE_MOD_CONFIG_PATH: path.join(dir, "isolated-config", "opencode.jsonc") }, encoding: "utf8",
     });
     console.log(apply());
     const first = fs.readFileSync(target);

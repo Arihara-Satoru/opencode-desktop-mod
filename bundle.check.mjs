@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolvePanelSymbols, resolveTooltipSymbol, resolvePanelChunkImport } from "./bundle-symbols.mjs";
+import { supportsGoals } from "./goal-plugin/deploy.mjs";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
@@ -229,7 +230,18 @@ if (asarIndex >= 0) {
   try {
     const target = path.join(dir, "app.asar");
     fs.copyFileSync(process.argv[asarIndex + 1], target);
-    const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], { cwd, env: { ...process.env, OPENCODE_ASAR_PATH: target }, encoding: "utf8" });
+    const configDirectory = path.join(dir, "isolated-config");
+    const testGoals = supportsGoals(JSON.parse(clean.read("package.json")).version);
+    const jsonFile = path.join(configDirectory, "opencode.json");
+    const jsonBefore = '{"model":"existing/model","providers":{"fixture":{"settings":{"apiKey":"{env:KEEP}"}}}}\n';
+    if (testGoals) {
+      fs.mkdirSync(configDirectory, { recursive: true });
+      fs.writeFileSync(jsonFile, jsonBefore);
+      fs.writeFileSync(path.join(configDirectory, "opencode.jsonc"), '{\n  // Keep higher-priority settings\n  "$schema": "https://opencode.ai/config.json",\n  "shell": "existing-shell"\n}\n');
+    }
+    const env = { ...process.env, OPENCODE_ASAR_PATH: target, OPENCODE_CONFIG_DIR: configDirectory,
+      OPENCODE_MOD_CONFIG_PATH: "" };
+    const apply = () => execFileSync(process.execPath, ["apply-mod.mjs", "--force"], { cwd, env, encoding: "utf8" });
     console.log(apply());
     const first = fs.readFileSync(target);
     apply();
@@ -238,6 +250,44 @@ if (asarIndex >= 0) {
     console.log(execFileSync(process.execPath, ["--experimental-vm-modules", "module-link.check.mjs", target,
       panelName, mainName, routeName, "sidebar-codex.js", "chat-width.js", "voice-input.mjs", "long-text.mjs"], { cwd, encoding: "utf8" }));
     const patchedMain = patched.read(assetsPath + mainName);
+    if (testGoals) {
+      const composerName = Object.keys(assets).find(name => {
+        if (!name.endsWith(".js")) return false;
+        const source = clean.read(assetsPath + name);
+        return source.includes(".data.session.prompt(") && source.includes("sessionDirectory:") && source.includes("images:");
+      });
+      const composer = patched.read(assetsPath + composerName);
+      const native = clean.read(assetsPath + composerName);
+      assert.equal(patched.read(assetsPath + "goal-composer.mjs"), fs.readFileSync(path.join(cwd, "goal-composer.mjs"), "utf8"));
+      assert.equal((composer.match(/__oc_capture_goal\([\w$]+\.editor\?\.\(\),\{draft:/g) ?? []).length, 1);
+      assert.equal((composer.match(/\.\.\.__oc_goal_metadata\(/g) ?? []).length, 1);
+      // Execute the exact setEditor method against the actual Solid runtime.
+      // Binding must wait until refs are attached and dispose on unmount.
+      const method = composer.match(/setEditor\(([\w$]+)\)\{([\s\S]*?)\},restoreFocus:/);
+      const locals = method[2].match(/^([\w$]+)=([\w$]+),([\w$]+)\.onEditor/);
+      const lifecycle = method[2].match(/,([\w$]+)\(\(\)=>__oc_bind_goal\([\w$]+,this,\(\)=>([\w$]+)\.state,\1,([\w$]+)\)\)/);
+      assert.ok(method && locals && lifecycle);
+      let bound = 0, disposed = 0, attached = false;
+      const node = {}, draft = {};
+      const env = { [locals[1]]: undefined, [locals[3]]: { onEditor: value => assert.equal(value, node) },
+        [lifecycle[2]]: { state: draft }, [lifecycle[1]]: runtime.createEffect, [lifecycle[3]]: runtime.onCleanup,
+        __oc_bind_long_text: () => {}, __oc_bind_goal: (value, controller, getDraft, effect, cleanup) => {
+          assert.equal(attached, true, "Do not search for a form while its native ref is detached");
+          assert.equal(value, node); assert.equal(getDraft(), draft); assert.equal(controller.kind, "native");
+          bound++; cleanup(() => { disposed++; });
+        },
+      };
+      const setEditor = vm.runInNewContext(`({${method[0].replace(/,restoreFocus:$/, "")}}).setEditor`, env);
+      let stop;
+      runtime.root(dispose => { stop = dispose; setEditor.call({ kind: "native" }, node); assert.equal(bound, 0); attached = true; });
+      assert.equal(bound, 1); stop(); assert.equal(disposed, 1);
+      // Shell and slash-command delivery stay byte-for-byte native.
+      for (const kind of ["shell", "command"]) {
+        const start = native.lastIndexOf("async function ", native.indexOf(`await e.api.${kind}(`));
+        const end = native.indexOf("async function ", start + 1);
+        if (start >= 0 && end > start) assert.ok(composer.includes(native.slice(start, end)), `Keep native ${kind} sender`);
+      }
+    }
     await checkCompanionSetup(patchedMain, panelName);
     // Execute the real companion module and initializer with the official Solid
     // primitives; only DOM/services are isolated. The setup test above stubs it.
@@ -368,6 +418,25 @@ if (asarIndex >= 0) {
       }
     }
     walk(patched.header);
+    const configFile = path.join(configDirectory, "opencode.jsonc");
+    assert.equal(fs.existsSync(configFile), testGoals, "Only supported clients receive goal registration");
+    if (fs.existsSync(configFile)) {
+      const { parse } = await import("./goal-plugin/dist/jsonc.mjs");
+      const config = parse(fs.readFileSync(configFile, "utf8"));
+      assert.equal(fs.readFileSync(jsonFile, "utf8"), jsonBefore, "Dual config installation must not modify the other file");
+      assert.equal(config.shell, "existing-shell");
+      assert.equal(config.plugins.length, 1);
+      const plugin = config.plugins[0];
+      assert.ok(plugin.startsWith(configDirectory.replaceAll("\\", "/")), "Deploy only into the isolated configuration directory");
+      assert.equal(fs.existsSync(path.join(plugin, "node_modules")), false);
+      assert.equal(fs.existsSync(path.join(plugin, "server.mjs")), true);
+      execFileSync(process.execPath, ["--check", path.join(plugin, "server.mjs")]);
+      console.log(execFileSync(process.execPath, ["apply-mod.mjs", "--restore", "--force"], { cwd, env, encoding: "utf8" }));
+      assert.deepEqual(fs.readFileSync(target), fs.readFileSync(process.argv[asarIndex + 1]));
+      assert.equal(parse(fs.readFileSync(configFile, "utf8")).plugins.length, 0);
+      assert.equal(fs.readFileSync(jsonFile, "utf8"), jsonBefore, "Dual config restore must not modify the other file");
+      assert.ok(fs.existsSync(path.join(plugin, "server.mjs")), "Restore does not delete plugin storage or deployment files");
+    }
     console.log(`Official ASAR integration passed: ${checked} changed scripts, real module linking, integrity, native fork/quote/footer, Solid runtime, real companion startup, sidebar data and idempotence.`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

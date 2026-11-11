@@ -1,0 +1,12 @@
+{
+  "name": "opencode-desktop-goals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./server.mjs",
+    "./rpc": "./rpc.mjs",
+    "./gui-experimental": "./gui-experimental.cjs"
+  }
+}

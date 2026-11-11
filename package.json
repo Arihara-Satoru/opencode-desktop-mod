@@ -8,9 +8,13 @@
     "opencode-desktop-mod": "./apply-mod.mjs"
   },
   "scripts": {
-    "test": "node bundle.check.mjs && node --experimental-vm-modules module-link.check.mjs && node launcher.check.mjs && node selection-quote.check.mjs && node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs",
+    "test": "node bundle.check.mjs && node --experimental-vm-modules module-link.check.mjs && node launcher.check.mjs && node selection-quote.check.mjs && node cx-sidebar.check.mjs && node voice.check.mjs && node chat-width.check.mjs && node long-text.check.mjs && node goal-composer.check.mjs && node --test goal-plugin/test/*.test.mjs",
     "apply": "node apply-mod.mjs",
-    "restore": "node apply-mod.mjs --restore"
+    "restore": "node apply-mod.mjs --restore",
+    "goals:install": "node goal-plugin/install.mjs",
+    "goals:uninstall": "node goal-plugin/install.mjs --uninstall",
+    "goals:test": "npm --prefix goal-plugin test",
+    "goals:check": "npm --prefix goal-plugin run typecheck"
   },
   "repository": {
     "type": "git",

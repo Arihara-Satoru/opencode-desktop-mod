@@ -1,0 +1,22 @@
+OpenCode Desktop Goals
+
+The architecture and behavioral requirements of this feature were studied from
+OpenAI's publicly available Codex source at commit:
+340a18ed7cd0aea3bc218838d9ac1f0f30efb1ac
+https://github.com/openai/codex
+
+Relevant paths:
+codex-rs/ext/goal/src/{runtime,extension,accounting,api,spec,tool,steering}.rs
+codex-rs/ext/goal/templates/goals/continuation.md
+codex-rs/ext/goal/tests/
+codex-rs/state/src/runtime/goals.rs
+
+Codex is Copyright 2025 OpenAI and distributed under Apache License 2.0.
+The continuation and goal-context instructions in src/prompts.mjs are rewritten
+behavioral adaptations of that source, not verbatim upstream files. The runtime
+is independently implemented in JavaScript for OpenCode's plugin interfaces.
+A copy of Apache License 2.0 is provided in LICENSES/Apache-2.0.txt.
+
+This is an independent, unofficial plugin. It does not include OpenAI model
+weights, cloud services, branding, or the Codex desktop application. It does not
+claim identical model behavior or proof that a model's completion is correct.

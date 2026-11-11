@@ -5,4 +5,5 @@ Thumbs.db
 *.asar
 *.asar.bak
 *.tmp
-
+.playwright-cli/
+output/playwright/

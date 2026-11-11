@@ -24,7 +24,7 @@ exit /b 1
 :restore_fail
 echo.
 echo [Failed] Restore failed. See the error above.
-echo [EBUSY] Please fully exit OpenCode Desktop, then try again.
+echo [Hint] For file-lock errors ^(EBUSY/EPERM^), fully exit OpenCode Desktop first.
 echo.
 pause
 exit /b 1
