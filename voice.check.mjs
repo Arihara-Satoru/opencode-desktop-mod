@@ -292,6 +292,26 @@ assert.ok(formSelectorMatch, "FORM selector must exist in voice-input.mjs");
 const formSelector = formSelectorMatch[1];
 assert.equal(formSelector, 'form[data-component="composer"]', "Must match all composer forms without being restricted to session-composer-dock");
 
+// The three explicit settings entries share one cancellation/dialog path.
+{
+  const start = voiceInputSrc.indexOf("    const openSettings = () => {");
+  const end = voiceInputSrc.indexOf('    configButton.addEventListener("click", openSettings);', start);
+  assert.ok(start >= 0 && end > start);
+  const calls = [];
+  const status = { hidden: false };
+  const open = vm.runInNewContext(voiceInputSrc.slice(start, end) + ";openSettings", {
+    lastState: "recording", recorder: { cancel: () => calls.push("cancel") },
+    visualizer: { stop: () => calls.push("stop") }, status,
+    settings: async () => calls.push("settings"), bridge: {}, mic: {}, showError: () => calls.push("error"),
+  });
+  open();
+  await tick();
+  assert.deepEqual(calls, ["cancel", "stop", "settings"]);
+  assert.equal(status.hidden, true);
+  assert.match(voiceInputSrc, /mic\.addEventListener\("contextmenu", e => \{\s*e\.preventDefault\(\);\s*openSettings\(\)/);
+  assert.match(voiceInputSrc, /e\.shiftKey && e\.key === "F10"[\s\S]*?openSettings\(\)/);
+}
+
 // Test dialog positioning with and without native view hook
 {
   const dialog = {

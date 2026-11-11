@@ -27,6 +27,12 @@ const STRINGS = {
     unpinChat: "取消置顶",
     copyPath: "复制路径",
     rename: "重命名",
+    archiveChat: "归档会话",
+    archivedChats: (n) => `已归档 (${n})`,
+    restoreChats: "恢复已归档的会话",
+    archiveHint: "使用 OpenCode 原生归档，保留聊天记录",
+    archiveFailed: "归档或恢复失败，请重试",
+    noArchived: "暂无已归档会话",
     remove: "删除会话…",
     confirmRemove: "确认删除",
     cancel: "取消",
@@ -34,7 +40,6 @@ const STRINGS = {
     moreOptions: "更多选项",
     closeProject: "从侧边栏移除",
     confirmCloseProject: "确认从侧边栏移除",
-    deleteProjectChats: "删除此项目全部会话…",
     confirmDeleteProjectChats: (n) => `确认删除该项目全部 ${n} 条会话`,
     restoreProjects: "恢复已移除的项目",
     hiddenTag: "已隐藏",
@@ -61,6 +66,12 @@ const STRINGS = {
     unpinChat: "Unpin",
     copyPath: "Copy path",
     rename: "Rename",
+    archiveChat: "Archive chat",
+    archivedChats: (n) => `Archived (${n})`,
+    restoreChats: "Restore archived chats",
+    archiveHint: "Use OpenCode's native archive; keep chat history",
+    archiveFailed: "Archive or restore failed. Please retry.",
+    noArchived: "No archived chats",
     remove: "Delete chat…",
     confirmRemove: "Confirm delete",
     cancel: "Cancel",
@@ -68,7 +79,6 @@ const STRINGS = {
     moreOptions: "More options",
     closeProject: "Remove from sidebar",
     confirmCloseProject: "Confirm remove from sidebar",
-    deleteProjectChats: "Delete all chats in project…",
     confirmDeleteProjectChats: (n) => `Confirm delete all ${n} chats`,
     restoreProjects: "Restore removed projects",
     hiddenTag: "hidden",
@@ -94,6 +104,7 @@ const ICONS = {
   chat: '<path d="M8 2.5c3 0 5.5 2 5.5 4.8S11 12.1 8 12.1c-.7 0-1.4-.1-2-.3l-2.6 1.2.5-2.4C2.9 9.6 2.5 8.5 2.5 7.3 2.5 4.5 5 2.5 8 2.5z"/>',
   gear: '<circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.6M8 12.6v1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M1.8 8h1.6M12.6 8h1.6M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>',
   x: '<path d="m4.5 4.5 7 7m0-7-7 7"/>',
+  archive: '<path d="M2 2.5h12v3H2zM3 5.5v8h10v-8M6 8h4"/>',
 };
 
 function icon(name, size = 16, extra = "") {
@@ -182,7 +193,7 @@ function injectStyle() {
 .oc-cx-more:hover{color:var(--v2-text-text-base);background:transparent}
 .oc-cx-empty{height:28px;padding:0 8px 0 32px;display:flex;align-items:center;color:var(--v2-text-text-faint);opacity:.75;cursor:default}
 .oc-cx-rename{flex:1 1 auto;min-width:0;height:22px;padding:0 4px;border-radius:5px;border:1px solid var(--v2-border-border-focus,#0a84ff);background:var(--v2-background-bg-base,transparent);color:var(--v2-text-text-base);font:inherit;outline:none;user-select:text}
-.oc-cx-pop{position:fixed;z-index:2147483000;min-width:168px;padding:6px;border-radius:12px;background:var(--v2-background-bg-base,#fff);color:var(--v2-text-text-base,#111);border:1px solid var(--v2-border-border-muted,rgba(128,128,128,.25));box-shadow:0 10px 32px rgba(0,0,0,.16),0 2px 6px rgba(0,0,0,.08);font-size:13px;line-height:18px;user-select:none}
+.oc-cx-pop{position:fixed;z-index:2147483000;min-width:168px;max-height:calc(100vh - 16px);overflow-y:auto;padding:6px;border-radius:12px;background:var(--v2-background-bg-base,#fff);color:var(--v2-text-text-base,#111);border:1px solid var(--v2-border-border-muted,rgba(128,128,128,.25));box-shadow:0 10px 32px rgba(0,0,0,.16),0 2px 6px rgba(0,0,0,.08);font-size:13px;line-height:18px;user-select:none}
 .oc-cx-pop button{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:0 10px;border-radius:8px;cursor:pointer}
 .oc-cx-pop button:hover{background:var(--v2-background-bg-layer-01,rgba(128,128,128,.12))}
 .oc-cx-pop button[disabled]{opacity:.4;pointer-events:none}
@@ -225,6 +236,8 @@ function mountUi(host, api) {
     activeKey: "",
     pins: Object.assign({ projects: [], sessions: [] }, loadJson(LS_PINS, {})),
     ui: Object.assign({ projectsCollapsed: false, collapsed: {}, expanded: {}, hiddenProjects: [] }, loadJson(LS_UI, {})),
+    archiveError: false,
+    archiving: new Set(),
     renaming: null,
     popup: null,
     card: null,
@@ -487,6 +500,17 @@ function mountUi(host, api) {
     }
   };
 
+  const updateHiddenProjects = (keys, restore) => {
+    for (const key of keys) {
+      const [srv, wt] = key.split("\u0000");
+      api.setProjectHidden(srv, wt || key, !restore);
+    }
+    const changed = new Set(keys);
+    state.ui.hiddenProjects = state.ui.hiddenProjects.filter((key) => !changed.has(key));
+    saveUi();
+    poll(true);
+  };
+
   const openProjectsMenu = (anchor) => {
     const hiddenList = state.ui.hiddenProjects || [];
     if (!hiddenList.length) {
@@ -498,7 +522,6 @@ function mountUi(host, api) {
       { sep: true },
       ...hiddenList.map((key) => {
         const parts = key.split("\u0000");
-        const srv = parts[0];
         const wt = parts[1] || key;
         const name = baseName(wt);
         return {
@@ -506,23 +529,9 @@ function mountUi(host, api) {
           icon: "folder",
           title: wt,
           delTitle: L.deleteHiddenRecord,
-          onClick: () => {
-            state.ui.hiddenProjects = state.ui.hiddenProjects.filter((k) => k !== key);
-            try {
-              const ctx = ctxOf(srv);
-              ctx?.projects.touch?.(wt);
-            } catch {}
-            saveUi();
-            poll(true);
-          },
+          onClick: () => updateHiddenProjects([key], true),
           onDelete: () => {
-            state.ui.hiddenProjects = state.ui.hiddenProjects.filter((k) => k !== key);
-            try {
-              const ctx = ctxOf(srv);
-              ctx?.projects.hide?.({ worktree: wt });
-            } catch {}
-            saveUi();
-            poll(true);
+            updateHiddenProjects([key], false);
             if (state.ui.hiddenProjects.length > 0) {
               openProjectsMenu(anchor);
             } else {
@@ -535,20 +544,7 @@ function mountUi(host, api) {
       {
         label: L.restoreAll,
         icon: "folderOpen",
-        onClick: () => {
-          for (const key of state.ui.hiddenProjects) {
-            const parts = key.split("\u0000");
-            const srv = parts[0];
-            const wt = parts[1] || key;
-            try {
-              const ctx = ctxOf(srv);
-              ctx?.projects.touch?.(wt);
-            } catch {}
-          }
-          state.ui.hiddenProjects = [];
-          saveUi();
-          poll(true);
-        },
+        onClick: () => updateHiddenProjects(hiddenList, true),
       },
       {
         label: L.clearAllHidden,
@@ -559,26 +555,44 @@ function mountUi(host, api) {
             label: L.confirmClearAllHidden(hiddenList.length),
             icon: "x",
             danger: true,
-            onClick: () => {
-              for (const key of state.ui.hiddenProjects) {
-                const parts = key.split("\u0000");
-                const srv = parts[0];
-                const wt = parts[1] || key;
-                try {
-                  const ctx = ctxOf(srv);
-                  ctx?.projects.hide?.({ worktree: wt });
-                } catch {}
-              }
-              state.ui.hiddenProjects = [];
-              saveUi();
-              poll(true);
-            },
+            onClick: () => updateHiddenProjects(hiddenList, false),
           },
           { label: L.cancel },
         ],
       },
     ];
     openMenu(anchor, items, anchor);
+  };
+
+  const archivedSessions = () => (state.snap?.servers || []).flatMap((sv) =>
+    (sv.archivedSessions || []).map((s) => ({ ...s, srv: sv.key, srvName: sv.name, key: sessKey(sv.key, s.id) })));
+
+  const archiveSession = async (s, archived) => {
+    if (state.archiving.has(s.key)) return;
+    state.archiving.add(s.key);
+    state.archiveError = false;
+    try {
+      await api.archive(s.srv, s.id, archived);
+    } catch {
+      state.archiveError = true;
+    } finally {
+      state.archiving.delete(s.key);
+      await poll(true);
+    }
+  };
+
+  const openArchivedSessionsMenu = (anchor) => {
+    const sessions = archivedSessions();
+    openMenu(anchor, [
+      { label: L.restoreChats, disabled: true },
+      { sep: true },
+      ...sessions.map((s) => ({
+        label: titleOf(s), icon: "chat", disabled: state.archiving.has(s.key),
+        title: `${s.srvName} · ${s.worktree || s.id}`,
+        onClick: () => archiveSession(s, false),
+      })),
+      ...(!sessions.length ? [{ label: L.noArchived, disabled: true }] : []),
+    ], anchor);
   };
 
   // Compare the grouped, sorted model, not the stores' incidental iteration order.
@@ -591,6 +605,9 @@ function mountUi(host, api) {
     ]),
     pins: state.pins,
     ui: state.ui,
+    archived: archivedSessions().map((s) => [s.key, s.title, s.worktree]),
+    archiveError: state.archiveError,
+    archiving: [...state.archiving],
   });
 
   const buildModel = (snap) => {
@@ -797,6 +814,7 @@ function mountUi(host, api) {
             render();
           },
         },
+        { label: L.archiveChat, icon: "archive", title: L.archiveHint, disabled: state.archiving.has(s.key), onClick: () => archiveSession(s, true) },
         { sep: true },
         {
           label: L.remove,
@@ -1064,6 +1082,13 @@ function mountUi(host, api) {
           : null,
       ),
     );
+    nodes.push(h("button", {
+        class: "oc-cx-row oc-cx-more",
+        title: L.restoreChats,
+        "aria-label": L.restoreChats,
+        onclick: (e) => openArchivedSessionsMenu(e.currentTarget),
+      }, L.archivedChats(archivedSessions().length)));
+    if (state.archiveError) nodes.push(h("div", { class: "oc-cx-empty", role: "alert" }, L.archiveFailed));
     if (!state.ui.projectsCollapsed) {
       if (!model.projs.length) nodes.push(h("div", { class: "oc-cx-empty" }, L.noProjects));
       for (const g of model.projs) nodes.push(...projectBlock(g, model, multi));
@@ -1109,10 +1134,17 @@ function mountUi(host, api) {
   };
 
   window.addEventListener("storage", (e) => {
-    if (e.key !== LS_PINS) return;
-    const p = loadJson(LS_PINS, {});
-    state.pins.projects = Array.isArray(p.projects) ? p.projects : [];
-    state.pins.sessions = Array.isArray(p.sessions) ? p.sessions : [];
+    if (e.key !== LS_PINS && e.key !== LS_UI && e.key !== null) return;
+    if (e.key === LS_PINS || e.key === null) {
+      const p = loadJson(LS_PINS, {});
+      state.pins.projects = Array.isArray(p.projects) ? p.projects : [];
+      state.pins.sessions = Array.isArray(p.sessions) ? p.sessions : [];
+    }
+    if (e.key === LS_UI || e.key === null) {
+      const ui = loadJson(LS_UI, {});
+      state.ui = Object.assign({ projectsCollapsed: false, collapsed: {}, expanded: {}, hiddenProjects: [] }, ui,
+        { hiddenProjects: Array.isArray(ui.hiddenProjects) ? ui.hiddenProjects : [] });
+    }
     poll(true);
   }, listen);
 
@@ -1168,6 +1200,7 @@ export function mount(host, deps) {
   const rawSessions = new Map();
   const removed = new Set();
   const srvOf = new Map();
+  const revisions = new Map();
 
   const serverList = () => {
     try {
@@ -1254,7 +1287,8 @@ export function mount(host, deps) {
               title: s.title || base.title,
               location: { ...base.location, ...s.location },
               projectID: s.projectID || base.projectID,
-              time: { ...base.time, ...s.time, created: base.time?.created ?? s.time?.created },
+               time: { ...base.time, ...s.time, created: base.time?.created ?? s.time?.created,
+                 archived: s.time ? s.time.archived : base.time?.archived },
             });
           } else {
             merged.set(s.id, s);
@@ -1262,9 +1296,10 @@ export function mount(host, deps) {
         }
       } catch {}
       const sessions = [];
+      const archivedSessions = [];
       for (const raw of merged.values()) {
-        if (raw.parentID || typeof raw.time?.archived === "number" || removed.has(sessKey(key, raw.id))) continue;
-        sessions.push(toRow(ctx, raw));
+        if (raw.parentID || removed.has(sessKey(key, raw.id))) continue;
+        (typeof raw.time?.archived === "number" ? archivedSessions : sessions).push(toRow(ctx, raw));
       }
       const known = new Set(projects.flatMap((p) => [p.worktree, ...(p.sandboxes || [])].map(norm)));
       for (const s of sessions) {
@@ -1274,7 +1309,7 @@ export function mount(host, deps) {
           projects.push({ worktree: s.worktree, name: "", sandboxes: [] });
         }
       }
-      servers.push({ key, name: srvName(sv, key), projects, sessions });
+      servers.push({ key, name: srvName(sv, key), projects, sessions, archivedSessions });
     }
     const tabs = deps.tabs;
     const cur = deps.current?.();
@@ -1300,13 +1335,21 @@ export function mount(host, deps) {
         const key = deps.serverKey(sv);
         const ctx = ctxOf(key);
         if (!ctx || ctx.sdk.connection.status() !== "connected") return;
-        let cursor;
-        for (let page = 0; page < 5; page++) {
-          const res = await ctx.sdk.api.session.list({ limit: 200, order: "desc", parentID: null, ...(cursor ? { cursor } : {}) });
-          for (const s of res.data) rawSessions.set(sessKey(key, s.id), s);
-          cursor = res.cursor?.next;
-          if (res.data.length < 200 || !cursor) break;
+        const revision = revisions.get(key) || 0;
+        const fetched = new Map();
+        // Query both buckets explicitly so archives remain discoverable after restart.
+        for (const archived of [false, true]) {
+          let cursor;
+          for (let page = 0; page < 5; page++) {
+            const res = await ctx.sdk.api.session.list({ limit: 200, order: "desc", parentID: null, archived, ...(cursor ? { cursor } : {}) });
+            for (const s of res.data) fetched.set(sessKey(key, s.id), s);
+            cursor = res.cursor?.next;
+            if (res.data.length < 200 || !cursor) break;
+          }
         }
+        if ((revisions.get(key) || 0) !== revision) return;
+        for (const id of rawSessions.keys()) if (id.startsWith(key + "\u0000")) rawSessions.delete(id);
+        for (const [id, raw] of fetched) rawSessions.set(id, raw);
       }),
     );
   };
@@ -1317,6 +1360,13 @@ export function mount(host, deps) {
     canEdit: !!deps.settings?.openProject,
     snapshot,
     refresh,
+    setProjectHidden: (srv, worktree, hidden) => {
+      const ctx = ctxOf(srv);
+      try {
+        if (hidden) ctx?.projects.hide?.({ worktree });
+        else ctx?.projects.touch?.(worktree);
+      } catch {}
+    },
     editProject: (srv, worktree) => deps.settings.openProject({ server: srv, project: worktree }),
     select: (key) => {
       const t = findTab(key);
@@ -1356,6 +1406,23 @@ export function mount(host, deps) {
         rawSessions.set(sessKey(srv, id), next);
         ctx.data.session.remember(next);
       }
+    },
+    archive: async (srv, id, archived) => {
+      const ctx = ctxOf(srv);
+      if (!ctx || ctx.sdk.connection.status() !== "connected") throw new Error("Server unavailable");
+      const key = sessKey(srv, id);
+      const cur = ctx.data.session.get?.(id) || rawSessions.get(key);
+      if (!cur) throw new Error("Session unavailable");
+      // Native API: PATCH /api/session/{sessionID}, boolean archived (not time.archived).
+      await ctx.sdk.api.session.update({ sessionID: id, archived });
+      revisions.set(srv, (revisions.get(srv) || 0) + 1);
+      const cached = rawSessions.get(key);
+      const latest = ctx.data.session.get?.(id) || cached || cur;
+      const next = { ...cached, ...latest, location: { ...cached?.location, ...latest.location },
+        time: { ...cached?.time, ...latest.time, created: cached?.time?.created ?? latest.time?.created,
+        archived: archived ? Date.now() : undefined } };
+      rawSessions.set(key, next);
+      try { ctx.data.session.remember?.(next); } catch {}
     },
     remove: async (srv, id) => {
       const ctx = ctxOf(srv);

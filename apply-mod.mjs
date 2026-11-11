@@ -311,29 +311,17 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   out = out.slice(0, iStart) + replacementIse + out.slice(iEnd);
 
   // 3. Isolate ephemeral SSE streaming sessions from main store & notifications
-  if (out.includes("function de(e){switch(e.type){")) {
-    out = out.replace(
-      "function de(e){switch(e.type){",
-      'function de(e){if(e?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.(e?.data?.sessionID))return;switch(e.type){'
-    );
-  } else {
-    out = out.replace(
-      /function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\)\{switch\(\2\.type\)\{/,
-      'function $1($2){if($2?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.($2?.data?.sessionID))return;switch($2.type){'
-    );
-  }
+  const skipBtwEvent = (param) => `if(${param}?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.(${param}?.data?.sessionID))return;`;
+  // Keep legacy anchors preferred: a different switch/listener may precede them.
+  const reducerPattern = out.includes("function de(e){switch(e.type){")
+    ? /function (de)\((e)\)\{switch\(e\.type\)\{/
+    : /function\s+([a-zA-Z0-9_$]+)\(([a-zA-Z0-9_$]+)\)\{switch\(\2\.type\)\{/;
+  out = out.replace(reducerPattern, (match, _name, param) => match.replace("{", "{" + skipBtwEvent(param)));
 
-  if (out.includes("D=e.sdk.event.listen(e=>{")) {
-    out = out.replace(
-      "D=e.sdk.event.listen(e=>{",
-      'D=e.sdk.event.listen(e=>{if(e?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.(e?.data?.sessionID))return;'
-    );
-  } else {
-    out = out.replace(
-      /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/,
-      '$1$2.sdk.event.listen($3=>{if($3?.data?.sessionID?.startsWith?.("ses_btw_")||window.__oc_active_btw_sessions?.has?.($3?.data?.sessionID))return;'
-    );
-  }
+  const listenerPattern = out.includes("D=e.sdk.event.listen(e=>{")
+    ? /(D=)(e)\.sdk\.event\.listen\((e)=>\{/
+    : /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/;
+  out = out.replace(listenerPattern, (match, _assignment, _context, param) => match + skipBtwEvent(param));
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
   const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
@@ -645,7 +633,6 @@ function main() {
   ${symbols.createSignal} as createSignal,
   ${symbols.showToast} as showToast,
   ${symbols.insert} as insert,
-  ${symbols.template} as template,
   ${symbols.createComponent} as createComponent,
   ${symbols.For} as For,
   ${symbols.createEffect} as createEffect,
@@ -707,44 +694,17 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
   ];
 
   // Append patched files to the end of payload so all existing offsets remain untouched
+  const patchedFiles = [
+    [assetsMap, mainFileName, patchedMainBuf],
+    [assetsMap, routeFileName, patchedRouteBuf],
+    [assetsMap, targetPanelFileName, patchedPanelBuf],
+    [assetsMap, sidebarFileName, patchedSidebarBuf],
+    [assetsMap, chatWidthFileName, patchedChatWidthBuf],
+    ...voiceFiles,
+    ...longTextFiles,
+  ];
   let currentOffset = payload.length;
-
-  assetsMap[mainFileName] = {
-    size: patchedMainBuf.length,
-    offset: String(currentOffset),
-    integrity: computeIntegrity(patchedMainBuf),
-  };
-  currentOffset += patchedMainBuf.length;
-
-  assetsMap[routeFileName] = {
-    size: patchedRouteBuf.length,
-    offset: String(currentOffset),
-    integrity: computeIntegrity(patchedRouteBuf),
-  };
-  currentOffset += patchedRouteBuf.length;
-
-  assetsMap[targetPanelFileName] = {
-    size: patchedPanelBuf.length,
-    offset: String(currentOffset),
-    integrity: computeIntegrity(patchedPanelBuf),
-  };
-  currentOffset += patchedPanelBuf.length;
-
-  assetsMap[sidebarFileName] = {
-    size: patchedSidebarBuf.length,
-    offset: String(currentOffset),
-    integrity: computeIntegrity(patchedSidebarBuf),
-  };
-  currentOffset += patchedSidebarBuf.length;
-
-  assetsMap[chatWidthFileName] = {
-    size: patchedChatWidthBuf.length,
-    offset: String(currentOffset),
-    integrity: computeIntegrity(patchedChatWidthBuf),
-  };
-  currentOffset += patchedChatWidthBuf.length;
-
-  for (const [map, name, buffer] of [...voiceFiles, ...longTextFiles]) {
+  for (const [map, name, buffer] of patchedFiles) {
     map[name] = { size: buffer.length, offset: String(currentOffset), integrity: computeIntegrity(buffer) };
     currentOffset += buffer.length;
   }
@@ -766,13 +726,7 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
   const finalAsarBuf = Buffer.concat([
     pickleHeader,
     payload,
-    patchedMainBuf,
-    patchedRouteBuf,
-    patchedPanelBuf,
-    patchedSidebarBuf,
-    patchedChatWidthBuf,
-    ...voiceFiles.map(([, , buffer]) => buffer),
-    ...longTextFiles.map(([, , buffer]) => buffer),
+    ...patchedFiles.map(([, , buffer]) => buffer),
   ]);
 
   fs.writeFileSync(asarPath, finalAsarBuf);

@@ -8,9 +8,12 @@ import { getEventListeners } from "node:events";
 const source = readFileSync(new URL("./cx-sidebar.js", import.meta.url), "utf8")
   .replace("export function mount", "function mount")
   .replace("  injectStyle();", `
-    host.check = { api, poll: (...args) => poll(...args), refresh: () => refresh(), state: () => state };
+    host.check = { api, poll: (...args) => poll(...args), refresh: () => refresh(), state: () => state,
+      archiveSession: (...args) => archiveSession(...args), sessionMenu: (...args) => sessionMenu(...args),
+      archivedMenu: (...args) => openArchivedSessionsMenu(...args), projectsMenu: (...args) => openProjectsMenu(...args) };
     render = (model) => host.paints.push(model || buildModel(state.snap));
-  `);
+  `)
+  .replace('  const openMenu = (anchor, items, row) => {', '  const openMenu = (anchor, items, row) => { host.menu = items; return;');
 const storage = new Map();
 const intervals = new Map();
 let nextInterval = 0;
@@ -37,12 +40,29 @@ history[6].time.created = history[7].time.created;
 const live = [];
 let current;
 const tabs = [];
+const updates = [], listQueries = [];
+let updateFailure = false;
+const projectVisibilityCalls = [];
 const ctx = {
-  projects: { list: () => projects },
-  data: { session: { list: () => live, root: (id) => id, status: () => "idle", pending: { list: () => [] } } },
+  projects: { list: () => projects,
+    touch: (worktree) => projectVisibilityCalls.push(["touch", worktree]),
+    hide: ({ worktree }) => projectVisibilityCalls.push(["hide", worktree]),
+  },
+  data: { session: { list: () => live, get: (id) => live.find((s) => s.id === id),
+    remember: (s) => { const i = live.findIndex((raw) => raw.id === s.id); if (i < 0) live.push(s); else live[i] = s; },
+    root: (id) => id, status: () => "idle", pending: { list: () => [] } } },
   notification: { session: { unread: () => false } },
   sdk: { connection: { status: () => "connected" }, api: { session: {
-    list: async () => ({ data: history, cursor: {} }),
+    list: async (query) => {
+      listQueries.push(query);
+      return { data: history.filter((s) => (typeof s.time.archived === "number") === query.archived), cursor: {} };
+    },
+    update: async (input) => {
+      updates.push({ ...input });
+      if (updateFailure) throw new Error("Request failed");
+      history = history.map((s) => s.id === input.sessionID
+        ? { ...s, time: { ...s.time, archived: input.archived ? 456 : undefined } } : s);
+    },
   } } },
 };
 const makeHost = () => ({ paints: [], style: {}, isConnected: true, classList: { add() {} }, addEventListener() {}, querySelectorAll: () => [] });
@@ -123,15 +143,105 @@ paints = host.paints.length;
 await check.poll(true);
 assert.equal(host.paints.length, paints + 1, "Explicit UI actions can still request a rebuild");
 
+// Exercise the native boolean archive contract, error path and restore callbacks.
+const archivedSession = model().projs.find((g) => g.worktree === "/one").sessions.find((s) => s.id === "s3");
+const tabsBeforeArchive = tabs.length;
+check.state().pins.sessions.push(archivedSession.key);
+await check.poll(true);
+assert.ok(model().pinnedSessions.some((s) => s.key === archivedSession.key));
+check.sessionMenu(archivedSession, host, host);
+const archiveItem = host.menu.find((item) => item.label === "Archive chat");
+assert.ok(archiveItem, "The screenshot's session menu must expose native archive beside rename and delete");
+assert.ok(!archiveItem.danger, "Archiving must be visually distinct from deleting");
+updateFailure = true;
+await archiveItem.onClick();
+assert.ok(ids().includes(archivedSession.id), "Failed archive must not hide a session");
+assert.equal(check.state().archiveError, true, "Failed operations surface a visible error");
+updateFailure = false;
+await archiveItem.onClick();
+assert.deepEqual(updates.at(-1), { sessionID: "s3", archived: true }, "Use native archived boolean, never time.archived payloads");
+assert.ok(!ids().includes(archivedSession.id));
+assert.equal(check.state().archiveError, false);
+assert.equal(model().pinnedSessions.length, 0);
+assert.ok(check.state().pins.sessions.includes(archivedSession.key), "Restore must preserve pin preferences");
+assert.equal(tabs.length, tabsBeforeArchive, "Mod must not close tabs or interrupt current work");
+assert.ok(!storage.get("oc-cx-ui.v1")?.includes("hiddenSessions"), "Native archive never writes a local hide list");
+await check.refresh();
+assert.ok(!ids().includes(archivedSession.id), "History refresh must not resurrect archived chats");
+assert.ok(listQueries.some((q) => q.archived === true) && listQueries.some((q) => q.archived === false));
+check.archivedMenu(host);
+let restoreItem = host.menu.find((item) => item.title?.includes("/one") && item.icon === "chat");
+assert.equal(restoreItem.label, archivedSession.title);
+updateFailure = true;
+await restoreItem.onClick();
+assert.ok(!ids().includes(archivedSession.id), "Failed restore must retain the archive");
+updateFailure = false;
+await restoreItem.onClick();
+assert.deepEqual(updates.at(-1), { sessionID: "s3", archived: false });
+assert.ok(ids().includes(archivedSession.id));
+assert.ok(model().pinnedSessions.some((s) => s.key === archivedSession.key));
+
+// Live server events override historical archive metadata, including unarchive.
+await check.archiveSession(archivedSession, true);
+let liveIndex = live.findIndex((s) => s.id === "s3");
+live[liveIndex] = { ...live[liveIndex], title: "Latest archived title" };
+await check.poll();
+check.archivedMenu(host);
+assert.ok(host.menu.some((item) => item.label === "Latest archived title"));
+live[liveIndex] = { ...live[liveIndex], time: { ...live[liveIndex].time, archived: undefined } };
+await check.poll();
+assert.ok(ids().includes(archivedSession.id), "Unarchive events must clear historical archive timestamps");
+await check.archiveSession(archivedSession, false);
+await check.archiveSession({ ...archivedSession, srv: "missing", key: "missing\0s3" }, true);
+assert.equal(check.state().archiveError, true, "Disconnected servers must not pretend to archive successfully");
+assert.ok(ids().includes(archivedSession.id));
+
+// Old local hide records are ignored, never silently migrated into server writes.
+const emitStorage = (key) => {
+  const event = new Event("storage");
+  event.key = key;
+  sandbox.window.dispatchEvent(event);
+};
+storage.set("oc-cx-ui.v1", JSON.stringify({ hiddenSessions: [{ key: archivedSession.key }], hiddenProjects: [] }));
+const updateCount = updates.length;
+emitStorage("oc-cx-ui.v1");
+assert.ok(ids().includes(archivedSession.id));
+assert.equal(updates.length, updateCount);
+
 // Test hidden projects and deletion
 await check.api.closeProject("local", "/one", false);
 assert.ok(check.state().ui.hiddenProjects.includes("local\0/one"), "Project added to hiddenProjects");
 check.state().ui.hiddenProjects = check.state().ui.hiddenProjects.filter((k) => k !== "local\0/one");
 assert.equal(check.state().ui.hiddenProjects.length, 0, "Project can be removed from hiddenProjects");
 await check.poll(true);
+await check.api.closeProject("local", "/one", false);
+check.projectsMenu(host);
+host.menu.find((item) => item.title === "/one").onClick();
+assert.equal(check.state().ui.hiddenProjects.length, 0);
+assert.deepEqual(projectVisibilityCalls.at(-1), ["touch", "/one"], "Restore reaches the native project context through the adapter");
+await check.api.closeProject("local", "/one", false);
+check.projectsMenu(host);
+host.menu.find((item) => item.title === "/one").onDelete();
+assert.equal(check.state().ui.hiddenProjects.length, 0);
+assert.deepEqual(projectVisibilityCalls.at(-1), ["hide", "/one"], "Forget-one and clear-all share the same native hide operation");
+for (const restore of [true, false]) {
+  await check.api.closeProject("local", "/one", false);
+  await check.api.closeProject("local", "/two", false);
+  check.projectsMenu(host);
+  const action = host.menu.find((item) => item.label === (restore ? "Restore all" : "Clear hidden list…"));
+  if (restore) action.onClick();
+  else action.onClick()[0].onClick();
+  assert.equal(check.state().ui.hiddenProjects.length, 0);
+  assert.deepEqual(projectVisibilityCalls.slice(-2), [[restore ? "touch" : "hide", "/one"], [restore ? "touch" : "hide", "/two"]]);
+}
 
+await check.archiveSession(archivedSession, true);
+storage.delete("oc-cx-ui.v1");
 const secondDispose = sandbox.mount(host, deps);
 await new Promise(setImmediate);
+assert.ok(!Array.from(host.paints.at(-1).projs.flatMap((g) => g.sessions), (s) => s.id).includes(archivedSession.id), "Native archive survives a remount without local hide records");
+host.check.archivedMenu(host);
+await host.menu.find((item) => item.label === "Latest archived title").onClick();
 assert.equal(intervals.size, 1, "Remounting a host must dispose its previous instance");
 assert.equal(getEventListeners(sandbox.window, "focus").length, 1);
 dispose();
@@ -143,6 +253,53 @@ secondDispose();
 assert.equal(intervals.size, 0);
 for (const name of ["focus", "blur", "storage"]) assert.equal(getEventListeners(sandbox.window, name).length, 0);
 for (const name of ["pointerdown", "keydown", "visibilitychange"]) assert.equal(getEventListeners(sandbox.document, name).length, 0);
+
+// Explicit archive pagination, refresh/update races and server-key isolation.
+{
+  const pagedHost = makeHost();
+  let hold, release, calls = [];
+  const pagedRows = Array.from({ length: 201 }, (_, i) => ({
+    id: `archive-${i}`, title: `Archive ${i}`, location: { directory: "/paged" }, time: { created: i, archived: 1000 },
+  }));
+  const pagedLive = [];
+  const pagedCtx = {
+    projects: { list: () => [{ worktree: "/paged" }] },
+    data: { session: { ...ctx.data.session, list: () => pagedLive, get: () => undefined,
+      remember: (s) => { const i = pagedLive.findIndex((r) => r.id === s.id); if (i < 0) pagedLive.push(s); else pagedLive[i] = s; } } },
+    sdk: { connection: { status: () => "connected" }, api: { session: {
+      update: async ({ sessionID, archived }) => { pagedRows.find((s) => s.id === sessionID).time.archived = archived ? 1000 : undefined; },
+      list: async (q) => {
+        calls.push({ ...q });
+        const rows = pagedRows.filter((s) => (typeof s.time.archived === "number") === q.archived);
+        const start = q.cursor ? 200 : 0;
+        const result = { data: structuredClone(rows.slice(start, start + 200)), cursor: start === 0 && rows.length > 200 ? { next: "next" } : {} };
+        if (hold && !q.archived) { const pending = hold; hold = null; await pending; }
+        return result;
+      },
+    } } },
+  };
+  const otherCtx = { ...pagedCtx, data: { session: { ...pagedCtx.data.session, list: () => [] } },
+    sdk: { connection: { status: () => "connected" }, api: { session: { list: async (q) => ({ data: q.archived ? [] : [{
+      id: "archive-0", title: "Other server", location: { directory: "/paged" }, time: { created: 1 },
+    }], cursor: {} }) } } } };
+  const pagedDispose = sandbox.mount(pagedHost, { ...deps, servers: {
+    servers: { list: () => [{ key: "paged" }, { key: "other" }] },
+    serverCtx: (key) => key === "paged" ? pagedCtx : otherCtx,
+  } });
+  await new Promise(setImmediate);
+  assert.equal(pagedHost.check.state().snap.servers.find((s) => s.key === "paged").archivedSessions.length, 201);
+  assert.ok(calls.some((q) => q.archived && q.cursor === "next"), "Page through archived results with the correct archive filter");
+  hold = new Promise((resolve) => { release = resolve; });
+  const pendingRefresh = pagedHost.check.refresh();
+  await new Promise(setImmediate);
+  await pagedHost.check.api.archive("paged", "archive-0", false);
+  release();
+  await pendingRefresh;
+  assert.ok(pagedHost.check.state().snap.servers.find((s) => s.key === "paged").sessions.some((s) => s.id === "archive-0"), "Stale refresh cannot undo a completed native restore");
+  assert.ok(pagedHost.check.state().snap.servers.find((s) => s.key === "other").sessions.some((s) => s.id === "archive-0"), "Same session ID on another server stays untouched");
+  pagedDispose();
+  assert.equal(intervals.size, 0);
+}
 
 // 2.2.6 removed ensureServerCtx/local from Global. Exercise the real adapter,
 // not just a mount stub, including asynchronous context creation/reconnection.
@@ -157,7 +314,7 @@ for (const name of ["pointerdown", "keydown", "visibilitychange"]) assert.equal(
     ...ctx, isLocal: true,
     projects: { list: () => modernProjects, used: () => modernProjects },
     data: { session: { ...ctx.data.session, list: () => [] } },
-    sdk: { connection: { status: () => "connected" }, api: { session: { list: async () => { requested++; return { data: modernHistory, cursor: {} }; } } } },
+    sdk: { connection: { status: () => "connected" }, api: { session: { list: async (q) => { requested++; return { data: q.archived ? [] : modernHistory, cursor: {} }; } } } },
   };
   const modernDispose = sandbox.mount(modernHost, {
     ...deps, tabs: modernTabs, current: () => modernCurrent,
@@ -233,4 +390,4 @@ if (process.argv[2]) {
   assert.equal(intervals.size, 0, "Pending history requests must not revive a disposed mount");
   console.log("OpenCode Solid checks passed: stable parent host, one mount, immediate owner cleanup, no async revival.");
 }
-console.log("Sidebar checks passed: stable creation order, model signature, refresh, deferred rendering, grouping, live metadata and lifecycle cleanup.");
+console.log("Sidebar checks passed: stable creation order, model signature, refresh, deferred rendering, grouping, native archive/restore/errors/server persistence/live events and lifecycle cleanup.");

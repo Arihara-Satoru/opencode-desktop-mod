@@ -10,6 +10,22 @@ import { resolvePanelSymbols, resolveTooltipSymbol, resolvePanelChunkImport } fr
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
+const eventIsolation = patcher.slice(patcher.indexOf("  // 3. Isolate ephemeral"), patcher.indexOf("  // 4. Inject Codex"));
+for (const fixture of [
+  { reducer: "function de(e){switch(e.type){default:return e}}", listener: "D=e.sdk.event.listen(e=>{events.push(e)})", param: "e" },
+  { reducer: "function renamed(evt){switch(evt.type){default:return evt}}", listener: "sub=ctx.sdk.event.listen(evt=>{events.push(evt)})", param: "evt" },
+]) {
+  const earlier = fixture.param === "e" ? "function unrelated(x){switch(x.type){default:return x}};other=ctx.sdk.event.listen(x=>{});" : "";
+  const patched = vm.runInNewContext(eventIsolation + ";out", { out: earlier + fixture.reducer + ";" + fixture.listener });
+  assert.ok(patched.startsWith(earlier), "Legacy preferred anchors must leave earlier unrelated switches/listeners untouched");
+  assert.equal((patched.match(/startsWith\?\.\("ses_btw_"\)/g) || []).length, 2);
+  const guard = patched.slice(patched.indexOf(`if(${fixture.param}?`), patched.indexOf("return;") + 7);
+  for (const [id, expected] of [["ses_btw_test", 0], ["generated-id", 0], ["normal", 1]]) {
+    assert.equal(vm.runInNewContext(`(()=>{${guard}return 1})()`, {
+      [fixture.param]: { data: { sessionID: id } }, window: { __oc_active_btw_sessions: new Set(["generated-id"]) },
+    }) ?? 0, expected);
+  }
+}
 const patchRoute = vm.runInNewContext(patcher.slice(patcher.indexOf("function patchSessionRouteBundle("), patcher.indexOf("function main(")) + ";patchSessionRouteBundle");
 const nativeActions = 'function footer(){return nativeCopy()}function fork(){return sdk.api.session.fork({sessionID:id,before:messageID})}';
 const routeFixture = 'let a=ctrl(s),b=virt({sessionID:s.identity.sessionID,scrollRef:a.scroller});e.setRevealMessage?.((t,r)=>{let i=r?items().findIndex(x=>is(x,`AssistantPart`)&&x.group.type===`part`&&x.group.ref.partID===r):-1,n=i>=0?i:e.projection.messageRowIndex().get(t);n!==void 0&&(flush(),v.scrollToIndex(n,{align:i>=0?`center`:`start`}))});' + nativeActions;

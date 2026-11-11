@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createWidthManager, PRESETS, getWidthIndicatorPosition } from "./chat-width.js";
+import { createWidthManager, getWidthIndicatorPosition } from "./chat-width.js";
 
 // Mock localStorage
 const store = new Map();
@@ -15,7 +15,6 @@ const mockStorage = {
 const wm = createWidthManager(mockStorage);
 assert.equal(wm.state.width, 744, "Default width must be 744");
 assert.equal(wm.state.isFull, false, "Default isFull must be false");
-assert.equal(wm.state.syncComposer, true, "Default syncComposer must be true");
 
 // 2. Set Width
 wm.setWidth(1100);
@@ -41,7 +40,6 @@ assert.equal(wm2.state.width, 3840);
 wm2.reset();
 assert.equal(wm2.state.width, 744);
 assert.equal(wm2.state.isFull, false);
-assert.equal(wm2.state.syncComposer, true);
 
 // 7. Cycle Presets
 // 744 -> 1200
@@ -65,14 +63,12 @@ wm2.setWidth(1000);
 assert.equal(wm2.state.isFull, false, "Setting width should exit full mode");
 assert.equal(wm2.state.width, 1000);
 
-// 9. Composer sync toggle
-wm2.setSyncComposer(false);
-assert.equal(wm2.state.syncComposer, false);
-
-// 10. Presets list validity
-assert.equal(PRESETS.length, 5);
-assert.equal(PRESETS[0].width, 744);
-assert.equal(PRESETS[4].isFull, true);
+// Old popover-only fields must not survive loading or keep dead options alive.
+store.set("oc-chat-width.v1", JSON.stringify({ width: 960, isFull: false, syncComposer: false }));
+const legacy = createWidthManager(mockStorage);
+assert.deepEqual(legacy.state, { width: 960, isFull: false }, "Preserve legacy width while dropping the unused composer toggle");
+assert.deepEqual(legacy.cyclePreset(), { width: 744, isFull: false }, "Custom widths still return to the first live preset");
+assert.deepEqual(JSON.parse(store.get("oc-chat-width.v1")), { width: 744, isFull: false });
 
 // The label must follow the actual rail, not the pointer (which can move past
 // the rail when the width reaches a minimum or maximum).

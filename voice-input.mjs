@@ -910,13 +910,14 @@ export function mountVoiceInput() {
       if (lastState === "recording") recorder.stop();
     });
 
-    // Setting button NEVER blocked: cancels active recording and opens settings modal directly
-    configButton.addEventListener("click", () => {
+    // All explicit settings entries cancel recording before opening the same dialog.
+    const openSettings = () => {
       if (lastState !== "idle") recorder.cancel();
       visualizer.stop();
       status.hidden = true;
       void settings(bridge, mic).catch(e => showError(e.message));
-    });
+    };
+    configButton.addEventListener("click", openSettings);
 
     // Cancel button aborts immediately
     cancelButton.addEventListener("click", () => {
@@ -1001,16 +1002,12 @@ export function mountVoiceInput() {
     mic.addEventListener("mousedown", e => e.preventDefault());
     mic.addEventListener("contextmenu", e => {
       e.preventDefault();
-      if (lastState !== "idle") recorder.cancel();
-      status.hidden = true;
-      void settings(bridge, mic).catch(e => showError(e.message));
+      openSettings();
     });
     mic.addEventListener("keydown", e => {
       if (e.shiftKey && e.key === "F10") {
         e.preventDefault();
-        if (lastState !== "idle") recorder.cancel();
-        status.hidden = true;
-        void settings(bridge, mic).catch(e => showError(e.message));
+        openSettings();
       }
     });
     mic.addEventListener("click", async () => {

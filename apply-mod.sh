@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "========================================================"
 echo " OpenCode Desktop UI Enhancement Patcher"
-echo " Timeline Scrubber + /btw Companion + Branch to Chat"
+echo " Timeline + /btw Companion + Sidebar + Voice + Long Text"
 echo "========================================================"
 echo ""
 

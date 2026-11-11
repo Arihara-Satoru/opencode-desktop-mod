@@ -9,19 +9,10 @@ const DEFAULT_WIDTH = 744; // OpenCode's default container-session width
 const MIN_WIDTH = 560; // Minimum readable width
 const TIMELINE_GUTTER = 36; // Left gutter to clear the timeline scrubber ticks
 
-export const PRESETS = [
-  { id: "default", label: "标准 744", width: 744, isFull: false },
-  { id: "cozy", label: "舒适 960", width: 960, isFull: false },
-  { id: "wide", label: "宽屏 1200", width: 1200, isFull: false },
-  { id: "ultrawide", label: "超宽 1440", width: 1440, isFull: false },
-  { id: "full", label: "铺满 100%", width: null, isFull: true },
-];
-
 export function createWidthManager(storage = (typeof localStorage !== "undefined" ? localStorage : null)) {
   let state = {
     width: DEFAULT_WIDTH,
     isFull: false,
-    syncComposer: true,
   };
 
   function load() {
@@ -34,9 +25,6 @@ export function createWidthManager(storage = (typeof localStorage !== "undefined
           state.width = Math.max(MIN_WIDTH, Math.min(3840, Math.round(parsed.width)));
         }
         state.isFull = Boolean(parsed.isFull);
-        if (typeof parsed.syncComposer === "boolean") {
-          state.syncComposer = parsed.syncComposer;
-        }
       }
     } catch {}
   }
@@ -59,15 +47,9 @@ export function createWidthManager(storage = (typeof localStorage !== "undefined
     if (saveAfter) save();
   }
 
-  function setSyncComposer(sync, saveAfter = true) {
-    state.syncComposer = Boolean(sync);
-    if (saveAfter) save();
-  }
-
   function reset() {
     state.width = DEFAULT_WIDTH;
     state.isFull = false;
-    state.syncComposer = true;
     save();
   }
 
@@ -95,7 +77,6 @@ export function createWidthManager(storage = (typeof localStorage !== "undefined
     save,
     setWidth,
     setFull,
-    setSyncComposer,
     reset,
     cyclePreset,
   };
@@ -305,14 +286,6 @@ export function initChatWidth() {
       root.style.setProperty("--container-session", "calc(100% - 72px)");
     } else {
       root.style.setProperty("--container-session", `min(calc(100% - 72px), ${manager.state.width}px)`);
-    }
-
-    if (!manager.state.syncComposer) {
-      root.setAttribute("data-oc-composer-fixed", "true");
-      root.style.setProperty("--oc-composer-override-width", `${DEFAULT_WIDTH}px`);
-    } else {
-      root.removeAttribute("data-oc-composer-fixed");
-      root.style.removeProperty("--oc-composer-override-width");
     }
 
     requestAnimationFrame(() => {
