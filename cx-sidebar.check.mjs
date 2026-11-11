@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { getEventListeners } from "node:events";
 
+// A native button must not reuse lower-specificity div-row rules: the host's
+// `button { all: unset }` reset wins over those and strips size/color/spacing.
+const sidebarSource = readFileSync(new URL("./cx-sidebar.js", import.meta.url), "utf8");
+const archiveRule = sidebarSource.match(/\.oc-cx-host \.oc-cx-archive\{([^}]+)\}/)?.[1];
+assert.ok(archiveRule, "Archive entry styles must outrank the host button reset");
+for (const declaration of ["display:flex", "width:100%", "height:28px", "padding:0 8px", "font:inherit", "font-size:12.5px", "color:var(--v2-text-text-faint)"]) {
+  assert.ok(archiveRule.includes(declaration), `Archive button must retain ${declaration} after reset`);
+}
+assert.match(sidebarSource, /\.oc-cx-host \.oc-cx-archive:focus-visible\{/);
+assert.match(sidebarSource, /class: "oc-cx-archive",\s*type: "button"/);
+
 // ponytail: Exercise the real adapter/model/poll without a DOM dependency.
 // Intercept only painting; Electron's visual layout still needs a manual smoke check.
 const source = readFileSync(new URL("./cx-sidebar.js", import.meta.url), "utf8")

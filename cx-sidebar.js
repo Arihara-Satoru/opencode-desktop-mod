@@ -191,6 +191,9 @@ function injectStyle() {
 .oc-cx-btn.is-on{color:var(--v2-text-text-base)}
 .oc-cx-more{height:26px;padding:0 8px 0 32px;color:var(--v2-text-text-faint);font-size:12.5px}
 .oc-cx-more:hover{color:var(--v2-text-text-base);background:transparent}
+.oc-cx-host .oc-cx-archive{display:flex;align-items:center;gap:8px;width:100%;height:28px;padding:0 8px;border-radius:8px;font:inherit;font-size:12.5px;line-height:18px;color:var(--v2-text-text-faint);cursor:pointer}
+.oc-cx-host .oc-cx-archive:hover{background:var(--v2-background-bg-layer-01,rgba(128,128,128,.12));color:var(--v2-text-text-base)}
+.oc-cx-host .oc-cx-archive:focus-visible{outline:2px solid var(--v2-border-border-focus,#0a84ff);outline-offset:-2px}
 .oc-cx-empty{height:28px;padding:0 8px 0 32px;display:flex;align-items:center;color:var(--v2-text-text-faint);opacity:.75;cursor:default}
 .oc-cx-rename{flex:1 1 auto;min-width:0;height:22px;padding:0 4px;border-radius:5px;border:1px solid var(--v2-border-border-focus,#0a84ff);background:var(--v2-background-bg-base,transparent);color:var(--v2-text-text-base);font:inherit;outline:none;user-select:text}
 .oc-cx-pop{position:fixed;z-index:2147483000;min-width:168px;max-height:calc(100vh - 16px);overflow-y:auto;padding:6px;border-radius:12px;background:var(--v2-background-bg-base,#fff);color:var(--v2-text-text-base,#111);border:1px solid var(--v2-border-border-muted,rgba(128,128,128,.25));box-shadow:0 10px 32px rgba(0,0,0,.16),0 2px 6px rgba(0,0,0,.08);font-size:13px;line-height:18px;user-select:none}
@@ -1083,11 +1086,12 @@ function mountUi(host, api) {
       ),
     );
     nodes.push(h("button", {
-        class: "oc-cx-row oc-cx-more",
+        class: "oc-cx-archive",
+        type: "button",
         title: L.restoreChats,
         "aria-label": L.restoreChats,
         onclick: (e) => openArchivedSessionsMenu(e.currentTarget),
-      }, L.archivedChats(archivedSessions().length)));
+      }, h("span", { class: "oc-cx-ico", html: icon("archive", 14) }), L.archivedChats(archivedSessions().length)));
     if (state.archiveError) nodes.push(h("div", { class: "oc-cx-empty", role: "alert" }, L.archiveFailed));
     if (!state.ui.projectsCollapsed) {
       if (!model.projs.length) nodes.push(h("div", { class: "oc-cx-empty" }, L.noProjects));
