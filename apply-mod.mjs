@@ -41,6 +41,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
+import { patchModelPicker } from "./model-picker-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
 import { prepareGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
 import { patchGoalComposer } from "./goal-composer-patch.mjs";
@@ -695,6 +696,12 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     [assetsMap, "goal-composer.mjs", fs.readFileSync(path.join(__dirname, "goal-composer.mjs"))],
     [assetsMap, composerFileName, Buffer.from(composerSource)],
   ];
+  const modelPickerFiles = Object.keys(assetsMap).filter(name => name.endsWith('.js') &&
+    !name.startsWith('main-') && readFileFromAsar(payload, assetsMap[name]).toString('utf8').includes('dialog.model.recent'));
+  if (modelPickerFiles.length !== 1) throw new Error('无法唯一定位原生模型选择器，未写入补丁。');
+  const modelPickerFile = modelPickerFiles[0];
+  longTextFiles.push([assetsMap, modelPickerFile, Buffer.from(patchModelPicker(readFileFromAsar(payload, assetsMap[modelPickerFile]).toString('utf8')))]);
+  console.log(`[patch] 模型快捷分组保留完整提供商列表: ${modelPickerFile}`);
   console.log(`[patch] 长文本附件与折叠模块: ${composerFileName}`);
 
   const desktopFiles = header?.files?.out?.files?.main?.files;

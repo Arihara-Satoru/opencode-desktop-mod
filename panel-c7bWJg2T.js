@@ -3611,17 +3611,7 @@ function setupGptHoverTimelineRail(ext) {
     const items = [];
     for (const turn of turns) {
       items.push({ type: "turn", turn, heading: null, id: turn.userMessageID });
-      // Include H1 & H2 headings as sub-ticks on the ruler
-      for (const h of turn.headings.slice(0, 8)) {
-        if (h.level <= 2) {
-          items.push({
-            type: "heading",
-            turn,
-            heading: h,
-            id: `${turn.userMessageID}:${h.partID}:${h.headingIdx}`,
-          });
-        }
-      }
+      // One tick per user message; reply headings stay in the hover card only.
     }
 
     cachedItems = items;
