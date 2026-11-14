@@ -331,7 +331,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   out = out.replace(listenerPattern, (match, _assignment, _context, param) => match + skipBtwEvent(param));
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
-  const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
+  const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?(?:get sections\(\)\{return [\w$]+\?\.sections\},get tabFooter\(\)\{return [\w$]+\?\.tabFooter\},get tabLabel\(\)\{return [\w$]+\?\.tabLabel\},)?tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
   const propMatch = out.match(propPattern);
   let vTabsInjected = false;
   if (propMatch) {
@@ -339,6 +339,8 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
     let startMatch = [...prefixSlice.matchAll(/([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,/g)].pop();
     // 2.2.6 selects inbox/projects/flat tabs inside a dedicated sidebar host.
     const containers = [...out.matchAll(/\(\(\)=>\{var ([\w$]+)=([\w$]+)\(\);return ([\w$]+)\(\1,([\w$]+\([\w$]+,\{get when\(\)\{return [\w$]+\.appearance\.tabLayout\(\)===`inbox`\},get fallback\(\)\{return [\s\S]{0,600}?\.general\.sidebarOrganize\(\)===`projects`[\s\S]{0,600}?)\)\),\1\}\)\(\)/g)];
+    // 2.3.0 uses a Switch-like host with inbox/projects/customize/recent cases.
+    containers.push(...out.matchAll(/\(\(\)=>\{var ([\w$]+)=([\w$]+)\(\);return ([\w$]+)\(\1,([\w$]+\([\w$]+,\{get fallback\(\)\{return [\w$]+\(\)\},get children\(\)\{return\[[\s\S]{0,1400}?\.appearance\.tabLayout\(\)===`inbox`[\s\S]{0,1800}?\.general\.sidebarOrganize\(\)===`recent`[\s\S]{0,200}?\]\}\})\)\),\1\}\)\(\)/g));
     if (containers.length > 1) throw new Error("无法唯一定位桌面侧边栏容器，未写入补丁。");
     const container = containers[0];
     if (container) startMatch = ["", "", container[1], container[2], container[3]];
@@ -700,7 +702,11 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     !name.startsWith('main-') && readFileFromAsar(payload, assetsMap[name]).toString('utf8').includes('dialog.model.recent'));
   if (modelPickerFiles.length !== 1) throw new Error('无法唯一定位原生模型选择器，未写入补丁。');
   const modelPickerFile = modelPickerFiles[0];
-  longTextFiles.push([assetsMap, modelPickerFile, Buffer.from(patchModelPicker(readFileFromAsar(payload, assetsMap[modelPickerFile]).toString('utf8')))]);
+  if (modelPickerFile === composerFileName) {
+    longTextFiles[2][2] = Buffer.from(patchModelPicker(composerSource));
+  } else {
+    longTextFiles.push([assetsMap, modelPickerFile, Buffer.from(patchModelPicker(readFileFromAsar(payload, assetsMap[modelPickerFile]).toString('utf8')))]);
+  }
   console.log(`[patch] 模型快捷分组保留完整提供商列表: ${modelPickerFile}`);
   console.log(`[patch] 长文本附件与折叠模块: ${composerFileName}`);
 

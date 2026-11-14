@@ -32,7 +32,7 @@ export function patchGoalComposer(source, symbols) {
     (all, fn, session, prompt) => { sendingPrompt = prompt; return all.replace("{let ", `{__oc_check_goal(${prompt});let `); }, "原生发送入口");
   replace(/metadata:\{displayText:([\w$]+)\.displayText,comments:\1\.comments,attachments:\1\.attachments,agent:([\w$]+)\.selection\.agent,/g,
     (all, data, prompt) => all.replace("metadata:{", `metadata:{...__oc_goal_metadata(${prompt}),`), "消息元数据");
-  replace(/await ([\w$]+)\.data\.session\.prompt\(([\w$]+)\)\.catch\(\(\)=>\1\.data\.session\.prompt\(\2\)\)\}/g,
+  replace(/await ([\w$]+)\.data\.session\.prompt\(([\w$]+)\)\.catch\(\(\)=>\1\.data\.session\.prompt\(\2\)\)(?:,\1\.data\.session\.acceptSend\([\w$]+\.id\))?\}/g,
     all => all.replace(/\}$/, `;__oc_goal_sent(${sendingPrompt})}`), "发送成功边界");
   return `import { bindGoalComposer as __oc_bind_goal, captureGoalSnapshot as __oc_capture_goal, checkGoalSend as __oc_check_goal, goalMetadata as __oc_goal_metadata, goalSent as __oc_goal_sent } from "./goal-composer.mjs";\n${source}`;
 }

@@ -14,6 +14,9 @@ const native = 'import{effect as eff,cleanup as clean}from"./host.js";' +
   'function fingerprint(t){return JSON.stringify([t.mode,t.delivery,t.text])}' +
   'async function send(e,t,n){let r=await serialize(e,t),i=async()=>{};let c={id:t.id,text:r.text,files:r.files,metadata:{displayText:r.displayText,comments:r.comments,attachments:r.attachments,agent:t.selection.agent,model:t.selection.model}};await e.data.session.prompt(c).catch(()=>e.data.session.prompt(c))}';
 const patched = patchGoalComposer(patchLongTextComposer(native), { createEffect: "effect", onCleanup: "cleanup" });
+const modern = native.replace('.catch(()=>e.data.session.prompt(c))}', '.catch(()=>e.data.session.prompt(c)),e.data.session.acceptSend(e.id)}');
+const modernPatched = patchGoalComposer(patchLongTextComposer(modern), { createEffect: "effect", onCleanup: "cleanup" });
+assert.ok(modernPatched.includes('.catch(()=>e.data.session.prompt(c)),e.data.session.acceptSend(e.id);__oc_goal_sent(t)}'), '2.3.0 keeps native acceptance before consuming goal mode');
 assert.match(patched, /__oc_capture_goal\(e\.editor\?\.\(\),\{draft:/);
 assert.match(patched, /desktopGoal:t\.desktopGoal,mode:t\.mode/);
 assert.match(patched, /\[t\.desktopGoal\?\?null,t\.mode/);

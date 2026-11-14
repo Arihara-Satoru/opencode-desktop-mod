@@ -401,4 +401,40 @@ if (process.argv[2]) {
   assert.equal(intervals.size, 0, "Pending history requests must not revive a disposed mount");
   console.log("OpenCode Solid checks passed: stable parent host, one mount, immediate owner cleanup, no async revival.");
 }
-console.log("Sidebar checks passed: stable creation order, model signature, refresh, deferred rendering, grouping, native archive/restore/errors/server persistence/live events and lifecycle cleanup.");
+// Startup can precede connection readiness; the next ordinary poll must load
+// history, with independent bucket publication and no duplicate requests.
+{
+  let connected = false;
+  const requests = [];
+  const pending = new Map();
+  const startupCtx = {
+    ...ctx,
+    data: { ...ctx.data, session: { ...ctx.data.session, list: () => [] } },
+    sdk: { connection: { status: () => connected ? 'connected' : 'connecting' }, api: { session: {
+      list: q => { requests.push(q); return new Promise(resolve => pending.set(q.archived, resolve)); },
+    } } },
+  };
+  const startupHost = makeHost();
+  const stop = sandbox.mount(startupHost, { ...deps, tabs: [], current: () => undefined,
+    servers: { servers: { list: () => [{ key: 'startup' }] }, serverCtx: () => startupCtx },
+  });
+  assert.equal(requests.length, 0);
+  assert.equal(startupHost.check.state().snap.archivesLoading, true, 'Unknown archives must not display zero');
+  connected = true;
+  startupHost.check.poll();
+  assert.equal(requests.length, 2, 'Connection-ready poll starts both buckets in parallel');
+  startupHost.check.poll();
+  assert.equal(requests.length, 2, 'In-flight refreshes are deduplicated');
+  pending.get(false)({ data: [{ id: 'startup-chat', title: 'Loaded', location: { directory: '/one' }, time: { created: 1 } }] });
+  await new Promise(setImmediate);
+  startupHost.check.poll();
+  assert.equal(startupHost.check.state().snap.servers[0].sessions.length, 1, 'Publish chats before archive query finishes');
+  assert.equal(startupHost.check.state().snap.archivesLoading, true);
+  pending.get(true)({ data: [{ id: 'startup-archive', title: 'Archived', location: { directory: '/one' }, time: { created: 1, archived: 2 } }] });
+  await new Promise(setImmediate);
+  startupHost.check.poll();
+  assert.equal(startupHost.check.state().snap.archivesLoading, false);
+  assert.equal(startupHost.check.state().snap.servers[0].archivedSessions.length, 1);
+  stop();
+}
+console.log("Sidebar checks passed: stable creation order, startup connection retry/parallel loading, model signature, refresh, deferred rendering, grouping, native archive/restore/errors/server persistence/live events and lifecycle cleanup.");

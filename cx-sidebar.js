@@ -29,6 +29,7 @@ const STRINGS = {
     rename: "重命名",
     archiveChat: "归档会话",
     archivedChats: (n) => `已归档 (${n})`,
+    archivesLoading: "已归档（加载中…）",
     restoreChats: "恢复已归档的会话",
     archiveHint: "使用 OpenCode 原生归档，保留聊天记录",
     archiveFailed: "归档或恢复失败，请重试",
@@ -68,6 +69,7 @@ const STRINGS = {
     rename: "Rename",
     archiveChat: "Archive chat",
     archivedChats: (n) => `Archived (${n})`,
+    archivesLoading: "Archived (loading…)",
     restoreChats: "Restore archived chats",
     archiveHint: "Use OpenCode's native archive; keep chat history",
     archiveFailed: "Archive or restore failed. Please retry.",
@@ -609,6 +611,7 @@ function mountUi(host, api) {
     pins: state.pins,
     ui: state.ui,
     archived: archivedSessions().map((s) => [s.key, s.title, s.worktree]),
+    archivesLoading: state.snap?.archivesLoading,
     archiveError: state.archiveError,
     archiving: [...state.archiving],
   });
@@ -1090,8 +1093,9 @@ function mountUi(host, api) {
         type: "button",
         title: L.restoreChats,
         "aria-label": L.restoreChats,
+        disabled: !!state.snap?.archivesLoading,
         onclick: (e) => openArchivedSessionsMenu(e.currentTarget),
-      }, h("span", { class: "oc-cx-ico", html: icon("archive", 14) }), L.archivedChats(archivedSessions().length)));
+      }, h("span", { class: "oc-cx-ico", html: icon("archive", 14) }), state.snap?.archivesLoading ? L.archivesLoading : L.archivedChats(archivedSessions().length)));
     if (state.archiveError) nodes.push(h("div", { class: "oc-cx-empty", role: "alert" }, L.archiveFailed));
     if (!state.ui.projectsCollapsed) {
       if (!model.projs.length) nodes.push(h("div", { class: "oc-cx-empty" }, L.noProjects));
@@ -1205,6 +1209,9 @@ export function mount(host, deps) {
   const removed = new Set();
   const srvOf = new Map();
   const revisions = new Map();
+  const historyReady = new Map();
+  const historyRequests = new Map();
+  const retryAfter = new Map();
 
   const serverList = () => {
     try {
@@ -1263,6 +1270,12 @@ export function mount(host, deps) {
 
   const snapshot = () => {
     const list = serverList();
+    // Polls also discover newly connected contexts. Retry failed/incomplete loads
+    // promptly without waiting for the periodic full-history refresh.
+    for (const sv of list) {
+      const key = deps.serverKey(sv);
+      if (historyReady.get(key)?.size !== 2 && Date.now() >= (retryAfter.get(key) || 0)) refreshServer(sv);
+    }
     const servers = [];
     for (const sv of list) {
       const key = deps.serverKey(sv);
@@ -1326,6 +1339,7 @@ export function mount(host, deps) {
     }
     return {
       servers,
+      archivesLoading: list.some(sv => !historyReady.get(deps.serverKey(sv))?.has(true)),
       drafts,
       multi: list.length > 1,
       current: cur && cur.type === "session" ? { server: cur.server, sessionId: cur.sessionId } : null,
@@ -1333,16 +1347,14 @@ export function mount(host, deps) {
     };
   };
 
-  const refresh = async () => {
-    await Promise.allSettled(
-      serverList().map(async (sv) => {
+  const refreshServer = (sv) => {
         const key = deps.serverKey(sv);
+        if (historyRequests.has(key)) return historyRequests.get(key);
         const ctx = ctxOf(key);
-        if (!ctx || ctx.sdk.connection.status() !== "connected") return;
+        if (!ctx || ctx.sdk.connection.status() !== "connected") return Promise.resolve();
         const revision = revisions.get(key) || 0;
-        const fetched = new Map();
-        // Query both buckets explicitly so archives remain discoverable after restart.
-        for (const archived of [false, true]) {
+        const request = Promise.allSettled([false, true].map(async archived => {
+          const fetched = new Map();
           let cursor;
           for (let page = 0; page < 5; page++) {
             const res = await ctx.sdk.api.session.list({ limit: 200, order: "desc", parentID: null, archived, ...(cursor ? { cursor } : {}) });
@@ -1350,13 +1362,23 @@ export function mount(host, deps) {
             cursor = res.cursor?.next;
             if (res.data.length < 200 || !cursor) break;
           }
-        }
-        if ((revisions.get(key) || 0) !== revision) return;
-        for (const id of rawSessions.keys()) if (id.startsWith(key + "\u0000")) rawSessions.delete(id);
-        for (const [id, raw] of fetched) rawSessions.set(id, raw);
-      }),
-    );
+          if ((revisions.get(key) || 0) !== revision) return;
+          // Publish each complete bucket independently; a slow archive query
+          // must not hold back ordinary sessions (or vice versa).
+          for (const [id, raw] of rawSessions) {
+            if (id.startsWith(key + "\u0000") && (typeof raw.time?.archived === "number") === archived) rawSessions.delete(id);
+          }
+          for (const [id, raw] of fetched) rawSessions.set(id, raw);
+          if (!historyReady.has(key)) historyReady.set(key, new Set());
+          historyReady.get(key).add(archived);
+        })).finally(() => {
+          historyRequests.delete(key);
+          retryAfter.set(key, Date.now() + 3000);
+        });
+        historyRequests.set(key, request);
+        return request;
   };
+  const refresh = async () => { await Promise.allSettled(serverList().map(refreshServer)); };
 
   const findTab = (key) => deps.tabs.find((t) => deps.tabKey(t) === key);
 
