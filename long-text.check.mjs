@@ -159,63 +159,35 @@ boundController.setEditor(editorNode);
 assert.equal(bound, boundController, "Bind the real controller as this, not a missing argument or wrong minified local");
 const renderer = readFileSync(new URL("./long-text.mjs", import.meta.url), "utf8");
 assert.doesNotMatch(renderer, /\.innerHTML\s*=|execCommand|\.submit\(|fetch\(/, "No untrusted HTML, direct editor mutation, synthetic sends or extra uploads");
-assert.match(renderer, /aria-expanded/);
-assert.match(renderer, /ResizeObserver/);
-
-// Deterministic renderer lifecycle, including virtualized unmount/remount and
-// resize-driven reflow. No browser timing assumptions in the regression suite.
+// The renderer still maintains composer hints, but never looks up or modifies
+// sent messages. Their display belongs to the native timeline setting.
 {
-  let mutation, resize, flush;
-  const classes = new Set(), attributes = new Map(), handlers = new Map();
-  const body = {
-    classList: { add: name => classes.add(name), remove: name => classes.delete(name) },
-    matches: () => true, getBoundingClientRect: () => ({ top: 20 }),
-    append: button => { body.button = button; },
+  let mutation, flush, hint, style;
+  const editor = { innerText: originalText, querySelectorAll: () => [] };
+  const form = {
+    querySelector: selector => selector === '.oc-long-hint' ? hint : editor,
+    append: node => { hint = node; },
   };
-  const style = { maxHeight: "", removeProperty: () => { style.maxHeight = ""; } };
-  const text = {
-    isConnected: true, parentElement: body, textContent: "正文".repeat(500), scrollHeight: 600, style,
-    closest: () => ({ getAttribute: () => "msg:text:0" }),
-    hasAttribute: name => attributes.has(name),
-    toggleAttribute: (name, on) => on ? attributes.set(name, "") : attributes.delete(name),
-    removeAttribute: name => attributes.delete(name),
-  };
-  let visible = [text];
   const document = {
-    head: { append() {} }, body: {}, addEventListener() {},
-    querySelectorAll: selector => selector.startsWith("form") ? [] : visible,
-    createElementNS: (ns, tag) => document.createElement(tag),
-    createElement: tag => tag === "style" ? {} : {
-      attrs: new Map(), setAttribute(name, value) { this.attrs.set(name, value); },
-      getAttribute(name) { return this.attrs.get(name); },
-      addEventListener(name, handler) { handlers.set(name, handler); },
-      remove() { if (body.button === this) body.button = null; },
-      append(...children) { for (const child of children) if (child && typeof child === "object" && child.className === "oc-long-toggle-label") this.label = child; },
+    head: { append(node) { style = node; } }, body: {}, addEventListener() {},
+    querySelectorAll: selector => {
+      assert.equal(selector, 'form[data-component="composer"]');
+      return [form];
     },
+    createElement: tag => ({ tag, hidden: false, setAttribute() {} }),
   };
   const sandbox = {
-    document, window: { addEventListener() {} }, location: { href: "session/one" },
-    getComputedStyle: () => ({ lineHeight: "20px", fontSize: "14px", paddingTop: "8px", paddingBottom: "8px" }),
+    document, window: {}, TextEncoder,
     MutationObserver: class { constructor(callback) { mutation = callback; } observe() {} },
-    ResizeObserver: class { constructor(callback) { resize = callback; } observe() {} unobserve() {} },
     setTimeout: callback => { flush = callback; },
   };
   vm.createContext(sandbox);
   vm.runInContext(renderer.replaceAll("export ", "").replace(/if \(typeof window !== "undefined"\) \{[\s\S]*$/, "") + "\ninitLongText();", sandbox);
-  assert.equal(body.button.getAttribute("aria-expanded"), "false");
-  assert.equal(style.maxHeight, "256px");
-  handlers.get("click")();
-  assert.equal(body.button.getAttribute("aria-expanded"), "true");
-  assert.equal(style.maxHeight, "none");
-  text.isConnected = false; visible = []; mutation(); flush();
-  text.isConnected = true; visible = [text]; mutation(); flush();
-  assert.equal(body.button.getAttribute("aria-expanded"), "true", "Restore expansion after virtualized remount");
-  text.scrollHeight = 60; text.textContent = "短消息"; mutation(); flush();
-  assert.equal(body.button, null);
-  assert.equal(style.maxHeight, "");
-  assert.equal(classes.has("oc-long-body"), false);
-  text.scrollHeight = 600; resize(); flush();
-  assert.ok(body.button, "Reflow can create the toggle again");
+  assert.doesNotMatch(style.textContent, /user-message|oc-long-toggle/);
+  assert.match(hint.textContent, /TXT/);
+  assert.equal(hint.hidden, false);
+  editor.innerText = '短消息'; mutation(); flush();
+  assert.equal(hint.hidden, true);
 }
 
 // Event wiring must intercept only long plain-text pastes, in capture phase.

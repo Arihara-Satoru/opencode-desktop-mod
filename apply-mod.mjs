@@ -21,8 +21,8 @@
  * 4. Voice input beside the main composer send button (语音输入)
  *    - Explicit recording/upload, configurable OpenAI-compatible transcription service
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
- * 5. Long text attachments and collapsible user messages (长文本附件与显示更多)
- *    - Native prompt serialization, lossless UTF-8 attachment, 12-line preview
+ * 5. Long text attachments (长文本附件)
+ *    - Native prompt serialization and lossless UTF-8 attachments
  * 6. Offline persistent goals on 2.2.7+ (持续目标，无独立服务或 npm 安装)
  *    - Prebuilt native server/GUI plugin deployed with the desktop patch
  *
@@ -708,7 +708,7 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     longTextFiles.push([assetsMap, modelPickerFile, Buffer.from(patchModelPicker(readFileFromAsar(payload, assetsMap[modelPickerFile]).toString('utf8')))]);
   }
   console.log(`[patch] 模型快捷分组保留完整提供商列表: ${modelPickerFile}`);
-  console.log(`[patch] 长文本附件与折叠模块: ${composerFileName}`);
+  console.log(`[patch] 长文本附件模块: ${composerFileName}`);
 
   const desktopFiles = header?.files?.out?.files?.main?.files;
   const preloadFiles = header?.files?.out?.files?.preload?.files;
