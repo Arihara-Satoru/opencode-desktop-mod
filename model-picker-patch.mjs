@@ -1,8 +1,14 @@
+const filter = /\.\.\.([\w$]+)\.groups\.flatMap\(([\w$]+)=>\{let ([\w$]+)=\2\.items\.filter\(([\w$]+)=>!([\w$]+)\.has\(([\w$]+)\(\4\)\)\);return \3\.length>0\?\[\{\.\.\.\2,items:\3\}\]:\[\]\}\)/g;
+const rows = /([\w$]+)\(\)\.flatMap\(([\w$]+)=>\2\.items\.map\(([\w$]+)=>\(\{id:([\w$]+)\(\3\),item:\3,group:\2\}\)\)\)/g;
+
+export function isModelPickerChunk(source) {
+  return source.includes('dialog.model.recent') &&
+    (source.includes('/*oc-model-picker*/') || [...source.matchAll(filter)].length > 0);
+}
+
 // Keep shortcut sections independent from the configured provider lists.
 export function patchModelPicker(source) {
   if (source.includes('/*oc-model-picker*/')) return source;
-  const filter = /\.\.\.([\w$]+)\.groups\.flatMap\(([\w$]+)=>\{let ([\w$]+)=\2\.items\.filter\(([\w$]+)=>!([\w$]+)\.has\(([\w$]+)\(\4\)\)\);return \3\.length>0\?\[\{\.\.\.\2,items:\3\}\]:\[\]\}\)/g;
-  const rows = /([\w$]+)\(\)\.flatMap\(([\w$]+)=>\2\.items\.map\(([\w$]+)=>\(\{id:([\w$]+)\(\3\),item:\3,group:\2\}\)\)\)/g;
   const filters = [...source.matchAll(filter)];
   const mappings = [...source.matchAll(rows)];
   if (!source.includes('dialog.model.recent') || filters.length !== 1 || mappings.length !== 1) {

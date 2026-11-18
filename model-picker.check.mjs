@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { patchModelPicker } from './model-picker-patch.mjs';
+import { isModelPickerChunk, patchModelPicker } from './model-picker-patch.mjs';
 
 const fixture = 'const label="dialog.model.recent";function $(e){return e.provider+":"+e.id}function group(e){let t=new Set(e.favorites.map($)),n=e.recent.filter(e=>!t.has($(e))),r=new Set([...t,...n.map($)]);return[...e.favorites.length>0?[{category:`favorite`,title:e.titles.favorite,items:e.favorites}]:[],...n.length>0?[{category:`recent`,title:e.titles.recent,items:n}]:[],...e.groups.flatMap(e=>{let t=e.items.filter(e=>!r.has($(e)));return t.length>0?[{...e,items:t}]:[]})]}function rows(C){return C().flatMap(e=>e.items.map(t=>({id:$(t),item:t,group:e})))}';
 const patched = patchModelPicker(fixture);
+assert.equal(isModelPickerChunk(fixture), true);
+assert.equal(isModelPickerChunk(patched), true);
+assert.equal(isModelPickerChunk('export default {"dialog.model.recent":"最近使用"}'), false, 'Translation chunks are not model picker code');
 assert.equal(patchModelPicker(patched), patched);
 const api = vm.runInNewContext(patched + ';({group,rows})');
 const a = { provider: 'one', id: 'a' }, b = { provider: 'one', id: 'b' }, c = { provider: 'two', id: 'a' };

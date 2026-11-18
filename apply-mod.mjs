@@ -41,7 +41,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
-import { patchModelPicker } from "./model-picker-patch.mjs";
+import { isModelPickerChunk, patchModelPicker } from "./model-picker-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
 import { prepareGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
 import { patchGoalComposer } from "./goal-composer-patch.mjs";
@@ -331,7 +331,7 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   out = out.replace(listenerPattern, (match, _assignment, _context, param) => match + skipBtwEvent(param));
 
   // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
-  const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?(?:get sections\(\)\{return [\w$]+\?\.sections\},get tabFooter\(\)\{return [\w$]+\?\.tabFooter\},get tabLabel\(\)\{return [\w$]+\?\.tabLabel\},)?tabs:([a-zA-Z0-9_$]+),get currentTab\(\)\{return ([a-zA-Z0-9_$]+)\(\)\},onNavigate:\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\)=>\{[\s\S]+?\.reorder\([a-zA-Z0-9_$]+\)\}/;
+  const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?(?:get sections\(\)\{return [\w$]+\?\.sections\},get tabFooter\(\)\{return [\w$]+\?\.tabFooter\},get tabLabel\(\)\{return [\w$]+\?\.tabLabel\},(?:get tabMenu\(\)\{return [\w$]+\?\.tabMenu\},get tabMuted\(\)\{return [\w$]+\?\.tabMuted\},get leading\(\)\{return [\w$]+\?\.leading\},)?)?tabs:([\w$]+),get currentTab\(\)\{return ([\w$]+)\(\)\},onNavigate:\([\w$]+,[\w$]+\)=>\{[\s\S]+?\.reorder\([\w$]+\)\}/;
   const propMatch = out.match(propPattern);
   let vTabsInjected = false;
   if (propMatch) {
@@ -699,7 +699,7 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     [assetsMap, composerFileName, Buffer.from(composerSource)],
   ];
   const modelPickerFiles = Object.keys(assetsMap).filter(name => name.endsWith('.js') &&
-    !name.startsWith('main-') && readFileFromAsar(payload, assetsMap[name]).toString('utf8').includes('dialog.model.recent'));
+    !name.startsWith('main-') && isModelPickerChunk(readFileFromAsar(payload, assetsMap[name]).toString('utf8')));
   if (modelPickerFiles.length !== 1) throw new Error('无法唯一定位原生模型选择器，未写入补丁。');
   const modelPickerFile = modelPickerFiles[0];
   if (modelPickerFile === composerFileName) {
