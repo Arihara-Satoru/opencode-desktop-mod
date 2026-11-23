@@ -1,7 +1,7 @@
 // Match the normal prompt path, not shell/commands or arbitrary SDK requests.
 // Fail before writing the archive if an upstream release changes this contract.
 export function patchLongTextComposer(source) {
-  const pattern = /async function ([\w$]+)\(([\w$]+),([\w$]+),([\w$]+)\)\{let ([\w$]+)=await ([\w$]+)\(\2,\3\),([\w$]+)=async\(\)=>\{/g;
+  const pattern = /async function ([\w$]+)\(([\w$]+),([\w$]+),([\w$]+)(?:,[\w$]+,[\w$]+)?\)\{let ([\w$]+)=await ([\w$]+)\(\2,\3\),([\w$]+)=async\(\)=>\{/g;
   let count = 0;
   const result = source.replace(pattern, (all, fn, session, prompt, track, data, serialize) => {
     // Verify this function actually delivers a serialized native user prompt.
@@ -15,7 +15,7 @@ export function patchLongTextComposer(source) {
   if (count !== 1) throw new Error(`无法安全定位长文本发送流程（匹配 ${count} 处），未写入补丁。`);
   // Use the native controller, not synthetic input or a second draft store.
   // Its file mentions persist url/mime/filename and survive native retries.
-  const editor = /setEditor\(([\w$]+)\)\{([\w$]+)=\1,([\w$]+)\.onEditor\?\.\(\1\)\},restoreFocus:([\w$]+),onInput\(/g;
+  const editor = /setEditor\(([\w$]+)\)\{([\w$]+)=\1,([\w$]+)\.onEditor\?\.\(\1\)\},(?:restoreCaret\(\)\{[^{}]*\},)?restoreFocus:([\w$]+),onInput\(/g;
   let editors = 0;
   const bound = result.replace(editor, (all, node) => {
     editors++;

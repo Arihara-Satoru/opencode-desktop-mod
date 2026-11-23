@@ -25,4 +25,19 @@ for (const favorites of [[], [a]]) {
 }
 assert.throws(() => patchModelPicker('unknown'), /未写入补丁/);
 assert.throws(() => patchModelPicker(fixture + fixture), /未写入补丁/);
+const memoFixture = fixture.slice(0, fixture.indexOf('function rows')) +
+  'function picker(C,b,s,widget,dispatch){let list=b(e=>{let t=new Map(e.map(e=>[e.id,e]));return C().flatMap(e=>e.items.map(n=>{let r=t.get($(n));return r?.item===n&&r.section===e.category&&r.title===e.title?r:{id:$(n),item:n,section:e.category,title:e.title}}))},[]),favorite=e=>{widget?.setActive($(e)),dispatch({type:`keyboard`,id:$(e),repeat:!1})},selected=e=>{let i=()=>s(e.model.id),a=()=>e.attrs[`data-active`];return i()};return{list,favorite,selected}}';
+const pick = vm.runInNewContext(patchModelPicker(memoFixture) + ';picker');
+let active, dispatched;
+const picker = pick(() => [{ category: 'recent', items: [a] }, { category: 'one', items: [a, b] }],
+  (reduce, previous) => () => previous = reduce(previous), key => key === 'one:a',
+  { active: () => ({ id: active }), setActive: id => { active = id; } }, event => { dispatched = event; });
+const memoItems = picker.list();
+assert.equal(new Set(memoItems.map(row => row.id)).size, 3);
+assert.equal(picker.list()[1], memoItems[1], 'Keep native row memoization');
+assert.ok(picker.selected({ model: memoItems[1], attrs: {} }), 'Selection compares the underlying model key');
+active = memoItems[1].id;
+picker.favorite(a);
+assert.equal(active, memoItems[1].id, 'Keep keyboard focus on the same duplicate row');
+assert.equal(dispatched.id, active);
 console.log('Model picker checks passed');

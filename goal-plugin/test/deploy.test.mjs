@@ -49,6 +49,19 @@ test("deploys a self-contained package and needs neither source files nor node_m
   assert.equal(fs.readdirSync(f.configDirectory).filter(file => file.endsWith(".bak")).length, 0);
 });
 
+test("2.4.0 leaves /goal to OpenCode and only removes the managed registration", t => {
+  const f = fixture(t), upgraded = { ...f.options, version: "2.4.0" };
+  assert.equal(supportsGoals(upgraded.version), false);
+  assert.equal(installGoals(upgraded).changed, false);
+  assert.deepEqual(fs.readdirSync(f.configDirectory), []);
+  fs.writeFileSync(f.configFile, '{"plugins":["unrelated-plugin"]}');
+  const old = installGoals(f.options);
+  assert.equal(installGoals(upgraded).changed, true);
+  assert.deepEqual(f.read().plugins, ["unrelated-plugin"]);
+  assert.ok(fs.existsSync(path.join(old.pluginDirectory, "server.mjs")));
+  assert.equal(installGoals(upgraded).changed, false);
+});
+
 test("offline installer runs from a copied release without an npm executable", t => {
   const f = fixture(t), release = path.join(f.root, "downloaded-patch", "goal-plugin");
   fs.mkdirSync(release, { recursive: true });

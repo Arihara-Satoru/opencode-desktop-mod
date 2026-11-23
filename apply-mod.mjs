@@ -23,7 +23,7 @@
  *    - Narrow audio permissions, encrypted optional key storage, no auto-submit
  * 5. Long text attachments (长文本附件)
  *    - Native prompt serialization and lossless UTF-8 attachments
- * 6. Offline persistent goals on 2.2.7+ (持续目标，无独立服务或 npm 安装)
+ * 6. Offline persistent goals on 2.2.7–2.3.x (2.4+ uses native goals)
  *    - Prebuilt native server/GUI plugin deployed with the desktop patch
  *
  * Usage:
@@ -43,7 +43,7 @@ import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
 import { isModelPickerChunk, patchModelPicker } from "./model-picker-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
-import { prepareGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
+import { hasNativeGoals, prepareGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
 import { patchGoalComposer } from "./goal-composer-patch.mjs";
 import { writeDesktopPatch } from "./desktop-install.mjs";
 
@@ -368,9 +368,13 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
         const sliceBefore = out.slice(Math.max(0, fullStart - 12000), fullStart);
         const srvListMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.servers\.list\(\)/);
         const serversVar = srvListMatch?.[1];
+        // Nested layout closures can shadow the earlier Global binding (e.g.
+        // 2.4.0 reuses it for the horizontal tab renderer). Resolve the hook
+        // by its provider name instead of closing over that local variable.
+        const globalHook = src.match(/\{use:([\w$]+),provider:[\w$]+\}=[\w$]+\(\{name:[`'"]Global[`'"]/)?.[1];
         const srvKeyMatch = sliceBefore.match(/([a-zA-Z0-9_$]+)\.key\([a-zA-Z0-9_$]+\)/);
         const serverKeyObj = srvKeyMatch?.[1];
-        if (!crComp || !tabKeyFn || !tabsStoreVar || !serversVar || !serverKeyObj) throw new Error("无法安全解析桌面侧边栏依赖，未写入补丁。");
+        if (!crComp || !tabKeyFn || !tabsStoreVar || !(globalHook || serversVar) || !serverKeyObj) throw new Error("无法安全解析桌面侧边栏依赖，未写入补丁。");
 
         const settingsHookMatch = src.match(/var\{use:([a-zA-Z0-9_$]+),provider:([a-zA-Z0-9_$]+)\}=([a-zA-Z0-9_$]+)\(\{name:[`'"]SettingsSurface[`'"]/);
         if (!settingsHookMatch) throw new Error("无法安全解析桌面侧边栏设置接口，未写入补丁。");
@@ -381,14 +385,16 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
           `${prefixFn ? prefixFn + "()," : ""}(()=>{`,
           `var ${cVar}=${hVar}(),orig=${origExpr},host=document.createElement('div'),origWrap=document.createElement('div');`,
           "host.className='oc-cx-host-container flex min-h-0 flex-1 flex-col';",
-          "origWrap.style.display='none';",
+          "host.style.display='none';origWrap.style.display='contents';",
           `${insFn}(origWrap,orig);`,
-          `var deps={servers:${serversVar},tabsStore:${tabsStoreVar},tabs:${tabsVar},current:()=>${currentTabFn}(),tabKey:${tabKeyFn},serverKey:${serverKeyObj}.key,settings:(()=>{try{return ${settingsHook}()}catch(e){try{return ${settingsProvider}()}catch(e2){return null}}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}}};`,
+          `var cxShow=ready=>{if(!cxDisposed){origWrap.style.display=ready?'none':'contents';host.style.display=ready?'':'none'}};`,
+          `var deps={servers:${globalHook ? `${globalHook}()` : serversVar},tabsStore:${tabsStoreVar},tabs:${tabsVar},current:()=>${currentTabFn}(),tabKey:${tabKeyFn},serverKey:${serverKeyObj}.key,settings:(()=>{try{return ${settingsHook}()}catch(e){try{return ${settingsProvider}()}catch(e2){return null}}})(),locale:()=>{try{return r.locale?.()||r.language?.()}catch(e){return'zh'}},onReady:cxShow};`,
           // createComponent runs untracked: snapshot reads must not subscribe the sidebar's parent.
           "var cxDisposed=!1,cxDispose;",
           "__oc_cx_onCleanup(()=>{cxDisposed=!0;cxDispose?.()});",
-          `var cxStart=m=>${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)});`,
-          "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(err=>{console.error('[cx-sidebar]',err);origWrap.style.display='';host.style.display='none'})};",
+          "var cxFail=err=>{cxShow(!1);console.error('[cx-sidebar]',err)};",
+          `var cxStart=m=>{try{${crComp}(()=>{if(!cxDisposed)cxDispose=m.mount(host,deps)})}catch(err){cxFail(err)}};`,
+          "if(window.__oc_cx_sidebar?.mount){cxStart(window.__oc_cx_sidebar)}else{import('./sidebar-codex.js').then(m=>{window.__oc_cx_sidebar=m;cxStart(m)}).catch(cxFail)};",
           `return ${insFn}(${cVar},[host,origWrap]),${cVar};`,
           "})()",
         ].join("");
@@ -758,11 +764,14 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
 
   const goals = prepareGoals({ version: targetVersion, configFile: goalsConfig });
   writeDesktopPatch(asarPath, finalAsarBuf, goals, curRawAsar);
-  if (goals.supported) {
+  if (hasNativeGoals(targetVersion)) {
+    console.log(`[patch] v${targetVersion} 使用官方 /goal；不注入 Mod 目标功能，保留旧目标数据。`);
+    if (goals.backup) console.log(`[patch] 目标配置备份：${goals.backup}`);
+  } else if (goals.supported) {
     console.log(`[patch] 持续目标 /goal 已随补丁部署：${goals.pluginDirectory}`);
     console.log(`[patch] 目标功能使用 OpenCode 自带服务，无需独立启动、安装 npm 依赖或保留源码路径。`);
     if (goals.backup) console.log(`[patch] 目标配置备份：${goals.backup}`);
-  } else console.log(`[patch] v${targetVersion} 不支持目标接口，保留原有增强；/goal 需要 2.2.7+。`);
+  } else console.log(`[patch] v${targetVersion} 不部署 Mod 目标插件，保留其他增强。`);
   console.log(`\n[patch] 成功完成补丁写入！`);
   console.log(`[patch] 目标文件：${asarPath} (${finalAsarBuf.length} 字节)`);
   console.log(`[patch] 官方原版备份保留在：${bakPath}`);

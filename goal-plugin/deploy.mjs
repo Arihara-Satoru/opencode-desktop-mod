@@ -12,9 +12,14 @@ const slash = value => path.resolve(value).replaceAll("\\", "/").replace(/\/$/, 
 const equal = (a, b) => process.platform === "win32" ? slash(a).toLowerCase() === slash(b).toLowerCase() : slash(a) === slash(b);
 const same = (a, b) => a === null ? b === null : b !== null && a.equals(b);
 
+export function hasNativeGoals(version) {
+  const match = /^(\d+)\.(\d+)\.\d+(?:\+[^\s]+)?$/.exec(version);
+  return !!match && Number(match[1]) === 2 && Number(match[2]) >= 4;
+}
+
 export function supportsGoals(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$/.exec(version);
-  return !!match && Number(match[1]) === 2 && (Number(match[2]) > 2 || Number(match[2]) === 2 && Number(match[3]) >= 7);
+  return !!match && Number(match[1]) === 2 && !hasNativeGoals(version) && (Number(match[2]) > 2 || Number(match[2]) === 2 && Number(match[3]) >= 7);
 }
 
 function snapshot(file) {
@@ -143,7 +148,7 @@ function removePlugin(text, index) {
 
 /** Prepare without writing anything. commit/rollback coordinate with ASAR writes. */
 export function prepareGoals(options = {}) {
-  const uninstall = options.uninstall === true;
+  const uninstall = options.uninstall === true || hasNativeGoals(options.version);
   if (!uninstall && !supportsGoals(options.version)) return { supported: false, changed: false, commit() {}, rollback() {}, finish() {} };
   const env = options.env ?? process.env;
   const explicit = options.configFile || env.OPENCODE_MOD_CONFIG_PATH;

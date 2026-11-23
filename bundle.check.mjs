@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolvePanelSymbols, resolveTooltipSymbol, resolvePanelChunkImport } from "./bundle-symbols.mjs";
-import { supportsGoals } from "./goal-plugin/deploy.mjs";
+import { hasNativeGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
@@ -231,7 +231,8 @@ if (asarIndex >= 0) {
     const target = path.join(dir, "app.asar");
     fs.copyFileSync(process.argv[asarIndex + 1], target);
     const configDirectory = path.join(dir, "isolated-config");
-    const testGoals = supportsGoals(JSON.parse(clean.read("package.json")).version);
+    const version = JSON.parse(clean.read("package.json")).version;
+    const testGoals = supportsGoals(version);
     const jsonFile = path.join(configDirectory, "opencode.json");
     const jsonBefore = '{"model":"existing/model","providers":{"fixture":{"settings":{"apiKey":"{env:KEEP}"}}}}\n';
     if (testGoals) {
@@ -250,6 +251,13 @@ if (asarIndex >= 0) {
     console.log(execFileSync(process.execPath, ["--experimental-vm-modules", "module-link.check.mjs", target,
       panelName, mainName, routeName, "sidebar-codex.js", "chat-width.js", "voice-input.mjs", "long-text.mjs"], { cwd, encoding: "utf8" }));
     const patchedMain = patched.read(assetsPath + mainName);
+    if (hasNativeGoals(version)) {
+      const composer = Object.keys(assets).filter(name => name.endsWith(".js")).map(name => patched.read(assetsPath + name))
+        .find(source => source.includes("__oc_prepare_long_text(") && source.includes(".data.session.prompt("));
+      assert.ok(composer, "Keep long-text delivery on native-goal builds");
+      assert.doesNotMatch(composer, /__oc_capture_goal|__oc_goal_metadata/);
+      assert.ok(patchedMain.includes("opencode.goal"), "Preserve the native goal UI contract");
+    }
     if (testGoals) {
       const composerName = Object.keys(assets).find(name => {
         if (!name.endsWith(".js")) return false;
@@ -323,22 +331,27 @@ if (asarIndex >= 0) {
     const sidebarReturn = patchedMain.indexOf("return ", patchedMain.indexOf("cxStart=m=>", sidebarAt));
     const sidebarFinish = patchedMain.indexOf("})()", sidebarReturn) + 4;
     const sidebarCode = patchedMain.slice(sidebarStart, sidebarFinish);
-    const deps = sidebarCode.match(/var deps=\{servers:([\w$]+),tabsStore:([\w$]+),tabs:([\w$]+),current:\(\)=>([\w$]+)\(\),tabKey:([\w$]+),serverKey:([\w$]+)\.key,settings:\(\(\)=>\{try\{return ([\w$]+)\(\)/);
+    const deps = sidebarCode.match(/var deps=\{servers:([\w$]+)(\(\))?,tabsStore:([\w$]+),tabs:([\w$]+),current:\(\)=>([\w$]+)\(\),tabKey:([\w$]+),serverKey:([\w$]+)\.key,settings:\(\(\)=>\{try\{return ([\w$]+)\(\)/);
     const expr = sidebarCode.match(/orig=([\w$]+)\(([\w$]+),\{/);
     const template = sidebarCode.match(/^\(\(\)=>\{var ([\w$]+)=([\w$]+)\(\)/);
     const insert = sidebarCode.match(/return ([\w$]+)\(\w+,\[host,origWrap\]\)/);
     assert.ok(deps && expr && template && insert, "Resolve injected sidebar bindings");
-    let mounted, cleaned = false, mountedHost;
+    let mounted, cleaned = false, mountedHost, originalWrap;
     const nativeTabs = [{ id: "one" }], nativeStore = {}, nativeServers = {};
     const bindings = {
-      [deps[1]]: nativeServers, [deps[2]]: nativeStore, [deps[3]]: nativeTabs,
-      [deps[4]]: () => nativeTabs[0], [deps[5]]: tab => tab.id, [deps[6]]: { key: s => s.id }, [deps[7]]: () => ({}),
+      [deps[1]]: deps[2] ? () => nativeServers : nativeServers, [deps[3]]: nativeStore, [deps[4]]: nativeTabs,
+      [deps[5]]: () => nativeTabs[0], [deps[6]]: tab => tab.id, [deps[7]]: { key: s => s.id }, [deps[8]]: () => ({}),
       [expr[1]]: (component, props) => props === undefined ? component() : ({ component, props }), [expr[2]]: () => {},
-      [template[2]]: () => ({}), [insert[1]]: () => {},
+      [template[2]]: () => ({}), [insert[1]]: (target, content) => { if (Array.isArray(content)) originalWrap = content[1]; },
       __oc_cx_onCleanup: fn => { bindings.dispose = fn; },
       document: { createElement: () => ({ style: {} }) },
       window: { __oc_cx_sidebar: { mount(host, deps) { mountedHost = host; mounted = deps; return () => { cleaned = true; }; } } },
     };
+    const globalProvider = main.match(/\{use:([\w$]+),provider:[\w$]+\}=[\w$]+\(\{name:`Global`,init:/)?.[1];
+    if (globalProvider) {
+      assert.equal(deps[1], globalProvider, "Use the real Global hook, not a shadowed layout local");
+      assert.equal(deps[2], "()");
+    }
     vm.runInNewContext(sidebarCode, bindings);
     assert.equal(mounted.tabs, nativeTabs);
     assert.equal(mounted.tabsStore, nativeStore);
@@ -346,6 +359,13 @@ if (asarIndex >= 0) {
     assert.equal(mounted.current(), nativeTabs[0]);
     assert.equal(mounted.tabKey(nativeTabs[0]), "one");
     assert.ok(mountedHost.className.includes("oc-cx-host-container"));
+    assert.equal(originalWrap.style.display, "contents", "Native sidebar visible until first usable snapshot");
+    assert.equal(mountedHost.style.display, "none");
+    mounted.onReady(true);
+    assert.equal(originalWrap.style.display, "none");
+    assert.equal(mountedHost.style.display, "");
+    mounted.onReady(false);
+    assert.equal(originalWrap.style.display, "contents", "Restore the native sidebar if the adapter becomes unavailable");
     bindings.dispose();
     assert.equal(cleaned, true, "Dispose sidebar on native container cleanup");
 
@@ -432,11 +452,13 @@ if (asarIndex >= 0) {
       assert.equal(fs.existsSync(path.join(plugin, "server.mjs")), true);
       execFileSync(process.execPath, ["--check", path.join(plugin, "server.mjs")]);
       console.log(execFileSync(process.execPath, ["apply-mod.mjs", "--restore", "--force"], { cwd, env, encoding: "utf8" }));
-      assert.deepEqual(fs.readFileSync(target), fs.readFileSync(process.argv[asarIndex + 1]));
       assert.equal(parse(fs.readFileSync(configFile, "utf8")).plugins.length, 0);
       assert.equal(fs.readFileSync(jsonFile, "utf8"), jsonBefore, "Dual config restore must not modify the other file");
       assert.ok(fs.existsSync(path.join(plugin, "server.mjs")), "Restore does not delete plugin storage or deployment files");
+    } else {
+      console.log(execFileSync(process.execPath, ["apply-mod.mjs", "--restore", "--force"], { cwd, env, encoding: "utf8" }));
     }
+    assert.deepEqual(fs.readFileSync(target), original);
     console.log(`Official ASAR integration passed: ${checked} changed scripts, real module linking, integrity, native fork/quote/footer, Solid runtime, real companion startup, sidebar data and idempotence.`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

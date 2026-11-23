@@ -1116,6 +1116,7 @@ function mountUi(host, api) {
       try {
         snap = api.snapshot();
       } catch {
+        api.onReady?.(false);
         return;
       }
       const curKey = snap.currentKey || (snap.current ? sessKey(snap.current.server, snap.current.sessionId) : "");
@@ -1126,9 +1127,14 @@ function mountUi(host, api) {
 
       const model = buildModel(snap);
       const structureHash = getStructureHash(model, snap.multi);
-      if (structureHash === state.structureHash && !force) return;
-      render(model);
-      state.structureHash = structureHash;
+      if (structureHash !== state.structureHash || force) {
+        render(model);
+        state.structureHash = structureHash;
+      }
+      api.onReady?.(snap.servers.length > 0);
+    } catch (error) {
+      api.onReady?.(false);
+      console.error("[cx-sidebar] render failed", error);
     } finally {
       polling = false;
     }
@@ -1383,6 +1389,7 @@ export function mount(host, deps) {
   const findTab = (key) => deps.tabs.find((t) => deps.tabKey(t) === key);
 
   const api = {
+    onReady: deps.onReady,
     canEdit: !!deps.settings?.openProject,
     snapshot,
     refresh,

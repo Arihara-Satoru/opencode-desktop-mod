@@ -415,13 +415,19 @@ if (process.argv[2]) {
     } } },
   };
   const startupHost = makeHost();
+  const readiness = [];
+  let hasContext = false;
   const stop = sandbox.mount(startupHost, { ...deps, tabs: [], current: () => undefined,
-    servers: { servers: { list: () => [{ key: 'startup' }] }, serverCtx: () => startupCtx },
+    onReady: ready => readiness.push(ready),
+    servers: { servers: { list: () => [{ key: 'startup' }] }, serverCtx: () => hasContext ? startupCtx : undefined },
   });
+  assert.equal(readiness.at(-1), false, 'No context: leave the native sidebar visible');
   assert.equal(requests.length, 0);
   assert.equal(startupHost.check.state().snap.archivesLoading, true, 'Unknown archives must not display zero');
   connected = true;
+  hasContext = true;
   startupHost.check.poll();
+  assert.equal(readiness.at(-1), true, 'A rendered sidebar with a usable context can replace the native sidebar');
   assert.equal(requests.length, 2, 'Connection-ready poll starts both buckets in parallel');
   startupHost.check.poll();
   assert.equal(requests.length, 2, 'In-flight refreshes are deduplicated');
@@ -435,6 +441,9 @@ if (process.argv[2]) {
   startupHost.check.poll();
   assert.equal(startupHost.check.state().snap.archivesLoading, false);
   assert.equal(startupHost.check.state().snap.servers[0].archivedSessions.length, 1);
+  hasContext = false;
+  startupHost.check.poll();
+  assert.equal(readiness.at(-1), false, 'If the server context goes away, return to the native sidebar');
   stop();
 }
 console.log("Sidebar checks passed: stable creation order, startup connection retry/parallel loading, model signature, refresh, deferred rendering, grouping, native archive/restore/errors/server persistence/live events and lifecycle cleanup.");
