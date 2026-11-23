@@ -269,11 +269,11 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
   const matchedOoe = labelMatch?.[1] || fnBody.match(/label:[\w$]+=>\(\(\)=>\{var [\w$]+=([\w$]+)\(\),[\w$]+=[\w$]+\.firstChild/)?.[1];
   if (!matchedOoe) throw new Error("无法解析 /btw 标签模板，未写入补丁。");
 
-  const suspenseMatch = fnBody.match(
-    /render:[a-zA-Z0-9_$]+=>[a-zA-Z0-9_$]+\(([a-zA-Z0-9_$]+),\{get children\(\)\{return/
-  );
+  const suspenseMatch = fnBody.match(/render:[\w$]+=>[\w$]+\(([\w$]+),\{get children\(\)\{return/)
+    // 2.4.1 registers a visibility observer before returning the Suspense tree.
+    ?? fnBody.match(/render:([\w$]+)=>\{let ([\w$]+)=[\w$]+\(\);return [\w$]+\(\(\)=>\2\.visible\(\)&&\1\.tab\.id,[\w$]+=>[\w$]+\.seen\(\1\.session,[\w$]+\)\),[\w$]+\(([\w$]+),\{get children\(\)\{return/);
   if (!suspenseMatch) throw new Error("无法解析 /btw 渲染挂钩，未写入补丁。");
-  const matchedZeWrapper = suspenseMatch[1];
+  const matchedZeWrapper = suspenseMatch.at(-1);
 
   const headerExtMatch = out.match(/e\.add\(([a-zA-Z0-9_$]+),\{at:[`'"]session\.header[`'"],order:/);
   if (!headerExtMatch) throw new Error("无法解析会话顶栏挂钩，未写入补丁。");

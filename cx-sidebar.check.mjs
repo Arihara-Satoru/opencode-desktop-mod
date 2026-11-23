@@ -8,7 +8,7 @@ import { getEventListeners } from "node:events";
 const sidebarSource = readFileSync(new URL("./cx-sidebar.js", import.meta.url), "utf8");
 const archiveRule = sidebarSource.match(/\.oc-cx-host \.oc-cx-archive\{([^}]+)\}/)?.[1];
 assert.ok(archiveRule, "Archive entry styles must outrank the host button reset");
-for (const declaration of ["display:flex", "width:100%", "height:28px", "padding:0 8px", "font:inherit", "font-size:12.5px", "color:var(--v2-text-text-faint)"]) {
+for (const declaration of ["display:flex", "width:100%", "height:30px", "padding:0 8px", "font:inherit", "font-size:13px", "color:var(--v2-text-text-faint)"]) {
   assert.ok(archiveRule.includes(declaration), `Archive button must retain ${declaration} after reset`);
 }
 assert.match(sidebarSource, /\.oc-cx-host \.oc-cx-archive:focus-visible\{/);

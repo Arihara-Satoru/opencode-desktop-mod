@@ -155,24 +155,24 @@ function loadJson(key, fallback) {
 function injectStyle() {
   if (document.getElementById("oc-cx-style")) return;
   const css = `
-.oc-cx-host{flex:1 1 auto;min-height:0;width:100%;overflow-y:auto;overflow-x:hidden;padding:2px 0 12px;font-size:13px;line-height:18px;color:var(--v2-text-text-base);scrollbar-width:thin;scrollbar-color:transparent transparent;user-select:none}
+.oc-cx-host{flex:1 1 auto;min-height:0;width:100%;overflow-y:auto;overflow-x:hidden;padding:2px 0 12px;font-size:14px;line-height:20px;color:var(--v2-text-text-base);scrollbar-width:thin;scrollbar-color:transparent transparent;user-select:none}
 .oc-cx-host:hover{scrollbar-color:var(--v2-border-border-base,rgba(128,128,128,.4)) transparent}
 .oc-cx-host *{box-sizing:border-box}
 .oc-cx-host button{all:unset;box-sizing:border-box;cursor:pointer}
-.oc-cx-label{display:flex;align-items:center;gap:4px;height:28px;padding:0 8px;margin-top:6px;color:var(--v2-text-text-faint);font-size:12.5px;cursor:pointer;border-radius:8px}
+.oc-cx-label{display:flex;align-items:center;gap:4px;height:30px;padding:0 8px;margin-top:6px;color:var(--v2-text-text-faint);font-size:13px;cursor:pointer;border-radius:8px}
 .oc-cx-label:hover{color:var(--v2-text-text-base)}
 .oc-cx-label.is-static{cursor:default}
 .oc-cx-label.is-static:hover{color:var(--v2-text-text-faint)}
 .oc-cx-chev{display:inline-flex;transition:transform .15s ease}
 .oc-cx-label.is-collapsed .oc-cx-chev{transform:rotate(-90deg)}
-.oc-cx-row{position:relative;display:flex;align-items:center;gap:8px;height:32px;padding:0 6px 0 8px;border-radius:8px;cursor:pointer;color:var(--v2-text-text-muted,inherit);outline:none}
+.oc-cx-row{position:relative;display:flex;align-items:center;gap:8px;height:34px;padding:0 6px 0 8px;border-radius:8px;cursor:pointer;color:var(--v2-text-text-muted,inherit);outline:none}
 .oc-cx-row:hover,.oc-cx-row:focus-visible{background:var(--v2-background-bg-layer-01,rgba(128,128,128,.12));color:var(--v2-text-text-base)}
 .oc-cx-row.is-active{background:var(--v2-background-bg-layer-02,rgba(128,128,128,.2));color:var(--v2-text-text-base)}
 .oc-cx-proj{margin-top:6px;color:var(--v2-text-text-base)}
 .oc-cx-proj .oc-cx-ico{color:var(--v2-icon-icon-muted,currentColor)}
 .oc-cx-ico{display:inline-flex;flex:none;width:16px;height:16px}
 .oc-cx-name,.oc-cx-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.oc-cx-sess{padding-left:32px;height:30px}
+.oc-cx-sess{padding-left:32px;height:32px;margin-bottom:2px}
 .oc-cx-sess.is-flat{padding-left:8px}
 .oc-cx-sess .oc-cx-title{color:inherit}
 .oc-cx-draft .oc-cx-title{font-style:italic;color:var(--v2-text-text-faint)}
@@ -193,7 +193,7 @@ function injectStyle() {
 .oc-cx-btn.is-on{color:var(--v2-text-text-base)}
 .oc-cx-more{height:26px;padding:0 8px 0 32px;color:var(--v2-text-text-faint);font-size:12.5px}
 .oc-cx-more:hover{color:var(--v2-text-text-base);background:transparent}
-.oc-cx-host .oc-cx-archive{display:flex;align-items:center;gap:8px;width:100%;height:28px;padding:0 8px;border-radius:8px;font:inherit;font-size:12.5px;line-height:18px;color:var(--v2-text-text-faint);cursor:pointer}
+.oc-cx-host .oc-cx-archive{display:flex;align-items:center;gap:8px;width:100%;height:30px;padding:0 8px;border-radius:8px;font:inherit;font-size:13px;color:var(--v2-text-text-faint);cursor:pointer}
 .oc-cx-host .oc-cx-archive:hover{background:var(--v2-background-bg-layer-01,rgba(128,128,128,.12));color:var(--v2-text-text-base)}
 .oc-cx-host .oc-cx-archive:focus-visible{outline:2px solid var(--v2-border-border-focus,#0a84ff);outline-offset:-2px}
 .oc-cx-empty{height:28px;padding:0 8px 0 32px;display:flex;align-items:center;color:var(--v2-text-text-faint);opacity:.75;cursor:default}
