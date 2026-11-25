@@ -40,6 +40,7 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
+import { patchFileActionsRenderer } from "./file-actions-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
 import { isModelPickerChunk, patchModelPicker } from "./model-picker-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
@@ -677,7 +678,17 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
     customPanelSrc = customPanelSrc.replace(chunkPattern, `import { ${dependency.external} as ${label} } from "./${dependency.file}"`);
   }
 
-  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\nimport "./goal-composer.mjs";\n` + patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols), "utf8");
+  let mainSource = patchMainBundle(origMainSrc, targetPanelFileName, origPanelSrc, symbols);
+  let fileActionsEnabled = false;
+  try {
+    mainSource = patchFileActionsRenderer(mainSource);
+    fileActionsEnabled = true;
+  } catch (error) {
+    // Older/unknown native Markdown contracts keep their existing behavior;
+    // never guess a session or break the other Mod features for this enhancement.
+    console.warn(`[patch] 文件快捷操作未启用：${error.message} 保留原生文件行为及其他增强。`);
+  }
+  const patchedMainBuf = Buffer.from(`import "./chat-width.js";\nimport "./voice-input.mjs";\nimport "./long-text.mjs";\nimport "./goal-composer.mjs";\n${fileActionsEnabled ? 'import "./file-actions.mjs";\n' : ''}` + mainSource, "utf8");
   const patchedRouteBuf = Buffer.from(patchSessionRouteBundle(origRouteSrc), "utf8");
   const patchedPanelBuf = Buffer.from(customPanelSrc, "utf8");
 
@@ -720,11 +731,14 @@ ${symbols.TextShimmer ? `  ${symbols.TextShimmer} as TextShimmer,` : ""}
   const preloadFiles = header?.files?.out?.files?.preload?.files;
   if (!desktopFiles?.["index.js"] || !preloadFiles?.["index.cjs"]) throw new Error("缺少桌面主进程或 preload，无法接入语音输入。");
   const voiceFiles = [
-    [desktopFiles, "index.js", Buffer.from(patchVoiceDesktopMain(readFileFromAsar(payload, desktopFiles["index.js"]).toString("utf8")))],
-    [preloadFiles, "index.cjs", Buffer.concat([readFileFromAsar(payload, preloadFiles["index.cjs"]), Buffer.from("\n" + fs.readFileSync(path.join(__dirname, "voice-preload.cjs"), "utf8"))])],
+    [desktopFiles, "index.js", Buffer.from('import "./file-actions-main.mjs";\n' + patchVoiceDesktopMain(readFileFromAsar(payload, desktopFiles["index.js"]).toString("utf8")))],
+    [preloadFiles, "index.cjs", Buffer.concat([readFileFromAsar(payload, preloadFiles["index.cjs"]), Buffer.from("\n" + ["voice-preload.cjs", "file-actions-preload.cjs"].map(name => fs.readFileSync(path.join(__dirname, name), "utf8")).join("\n"))])],
     ...["voice-main.mjs", "voice-shared.mjs", "voice-service.mjs"].map(name => [desktopFiles, name, fs.readFileSync(path.join(__dirname, name))]),
     ...["voice-input.mjs", "voice-recorder.mjs", "voice-shared.mjs", "voice-audio.mjs"].map(name => [assetsMap, name, fs.readFileSync(path.join(__dirname, name))]),
+    ...["file-actions-main.mjs", "file-actions-core.mjs"].map(name => [desktopFiles, name, fs.readFileSync(path.join(__dirname, name))]),
+    [assetsMap, "file-actions.mjs", fs.readFileSync(path.join(__dirname, "file-actions.mjs"))],
   ];
+  if (fileActionsEnabled) console.log("[patch] 文件快捷操作：点击打开、右键定位/复制路径，Windows 脚本运行与目录终端。");
 
   // Append patched files to the end of payload so all existing offsets remain untouched
   const patchedFiles = [

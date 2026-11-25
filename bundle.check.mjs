@@ -251,6 +251,38 @@ if (asarIndex >= 0) {
     console.log(execFileSync(process.execPath, ["--experimental-vm-modules", "module-link.check.mjs", target,
       panelName, mainName, routeName, "sidebar-codex.js", "chat-width.js", "voice-input.mjs", "long-text.mjs"], { cwd, encoding: "utf8" }));
     const patchedMain = patched.read(assetsPath + mainName);
+    const fileContract = /openLocalFile:([\w$]+)=>void ([\w$]+)\.links\.open\(\{href:\1,session:([\w$]+)\.session\}\)/.test(main)
+      && /\.toggleAttribute\([`'"]data-local-links[`'"],!![\w$]+\?\.openLocalFile\)/.test(main);
+    assert.equal(patchedMain.includes('__ocBindFileRoot?.('), fileContract, "Bind only known native Markdown contracts");
+    assert.equal(patchedMain.includes('__ocFileContext:()=>'), fileContract, "Keep the originating MountedSession, not the active project");
+    if (fileContract) {
+      const captured = patchedMain.match(/openLocalFile:(Object\.assign\(([\w$]+)=>void ([\w$]+)\.links\.open\(\{href:\2,session:([\w$]+)\.session\}\),\{__ocFileContext:\(\)=>\4\.session\}\))/);
+      assert.ok(captured, "Capture the exact emitted native handler");
+      const ownSession = { directory: "D:/old-session", server: { local: true } };
+      const props = { session: ownSession };
+      const nativeOpens = [];
+      const handler = vm.runInNewContext(captured[1], {
+        [captured[3]]: { links: { open: data => nativeOpens.push(data) } }, [captured[4]]: props,
+      });
+      assert.equal(handler.__ocFileContext(), ownSession);
+      handler("remote.txt");
+      assert.equal(nativeOpens[0].session, ownSession, "The original native fallback keeps its session");
+      const rootBind = patchedMain.match(/window\.__ocBindFileRoot\?\.\(([\w$]+),\(\)=>([\w$]+)\?\.openLocalFile\?\.__ocFileContext\?\.\(\)\)/);
+      assert.ok(rootBind);
+      const root = {};
+      let getSession;
+      vm.runInNewContext(rootBind[0], { [rootBind[1]]: root, [rootBind[2]]: { openLocalFile: handler },
+        window: { __ocBindFileRoot: (element, accessor) => { assert.equal(element, root); getSession = accessor; } } });
+      assert.equal(getSession(), ownSession, "Execute the real Markdown root insertion");
+      props.session = { directory: "D:/moved-session", server: { local: true } };
+      assert.equal(getSession(), props.session, "Follow the owning provider, not a global current session");
+    }
+    for (const name of ["file-actions-main.mjs", "file-actions-core.mjs"]) {
+      assert.equal(patched.read("out/main/" + name), fs.readFileSync(path.join(cwd, name), "utf8"));
+    }
+    assert.equal(patched.read(assetsPath + "file-actions.mjs"), fs.readFileSync(path.join(cwd, "file-actions.mjs"), "utf8"));
+    assert.ok(patched.read("out/main/index.js").includes('import "./file-actions-main.mjs";'));
+    assert.ok(patched.read("out/preload/index.cjs").includes('"__ocFiles"'));
     if (hasNativeGoals(version)) {
       const composer = Object.keys(assets).filter(name => name.endsWith(".js")).map(name => patched.read(assetsPath + name))
         .find(source => source.includes("__oc_prepare_long_text(") && source.includes(".data.session.prompt("));
