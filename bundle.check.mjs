@@ -8,10 +8,37 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolvePanelSymbols, resolveTooltipSymbol, resolvePanelChunkImport } from "./bundle-symbols.mjs";
 import { hasNativeGoals, supportsGoals } from "./goal-plugin/deploy.mjs";
+import { createInboxDirectories } from "./inbox-sidebar-patch.mjs";
 
 const cwd = path.dirname(fileURLToPath(import.meta.url));
 const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
-const eventIsolation = patcher.slice(patcher.indexOf("  // 3. Isolate ephemeral"), patcher.indexOf("  // 4. Inject Codex"));
+{
+  const entry = (key, directory, server = "local") => ({ key, server, session: { location: { directory } } });
+  const mockStorage = new Map();
+  const entries = [entry("pin", "C:/repo"), entry("a", "C:\\repo"), entry("b", "c:/repo/"),
+    entry("other", "C:/other/repo"), entry("remote", "C:/repo", "remote")];
+  const memo = fn => fn;
+  const signal = value => [() => value, next => { value = next; }];
+  const create = vm.runInNewContext(`(${createInboxDirectories})`, {
+    localStorage: { getItem: key => mockStorage.get(key), setItem: (key, value) => mockStorage.set(key, value) },
+  });
+  const mount = () => create(() => entries, row => row.key === "pin", (read, compact) => ({ read, compact }), memo, signal);
+  const inbox = mount();
+  const [pins, repo, other, remote] = inbox.groups();
+  assert.equal(inbox.groups().length, 4, "Group by directory and server, not by basename or provider project label");
+  assert.equal(pins.rows().read()[0].key, "pin");
+  assert.equal(repo.count, 2, "Normalize Windows spelling and path separators");
+  assert.equal(repo.rows().compact, true, "Only directory rows use the compact native card");
+  assert.equal(inbox.groups()[1], repo, "Keep directory section identity across reads");
+  repo.onToggle();
+  assert.equal(repo.expanded, false);
+  assert.equal(inbox.visible().map(row => row.key).join(","), "pin,other,remote");
+  assert.equal(other.expanded && remote.expanded, true);
+  assert.equal(mount().groups()[1].expanded, false, "Remember the directory collapse across mounts");
+  repo.onToggle();
+  assert.equal(inbox.visible().map(row => row.key).join(","), "pin,a,b,other,remote");
+}
+const eventIsolation = patcher.slice(patcher.indexOf("  // 3. Isolate ephemeral"), patcher.indexOf("  // 4. Prefer native Inbox"));
 for (const fixture of [
   { reducer: "function de(e){switch(e.type){default:return e}}", listener: "D=e.sdk.event.listen(e=>{events.push(e)})", param: "e" },
   { reducer: "function renamed(evt){switch(evt.type){default:return evt}}", listener: "sub=ctx.sdk.event.listen(evt=>{events.push(evt)})", param: "evt" },
@@ -356,7 +383,17 @@ if (asarIndex >= 0) {
     assert.equal(typeof startupWindow.__oc_btw_slash, "function");
     startupWindow.__oc_btw_slash("", { id: "startup-session" });
     assert.equal(toggles[0][0], "btw:main");
-    assert.ok(patchedMain.includes("host.className='oc-cx-host-container"), "Do not silently skip Codex sidebar injection");
+    if (main.includes('`sidebar.inbox.working.placement`')) {
+      assert.ok(patchedMain.includes("__ocDirectories.groups()"), "Group the native Inbox on the 2.4.2 contract");
+      assert.ok(patchedMain.includes("__ocDirectories.visible()"), "Keep shortcut order in sync with visible directory rows");
+      for (const pattern of [/onArchive:\(\)=>void [\w$]+\.archive\([\w$]+\(\)\)/, /onUnarchive:\(\)=>void [\w$]+\.unarchive\([\w$]+\(\)\)/, /\.plural\(`sidebar\.inbox\.elapsed\.days`,Math\.floor/]) {
+        const native = main.match(pattern)?.[0];
+        assert.ok(native && patchedMain.includes(native), `Keep native Inbox behavior: ${pattern}`);
+      }
+      assert.match(patchedMain, /if\([\w$]+\.__ocDirectory\)\{[^{}]+\.hidden=true\}return/, "Hide the repeated label only on grouped cards");
+      assert.ok(!patchedMain.includes("host.className='oc-cx-host-container"), "Do not replace the official Inbox with the legacy sidebar");
+    } else {
+    assert.ok(patchedMain.includes("host.className='oc-cx-host-container"), "Do not silently skip legacy Codex sidebar injection");
     const sidebarAt = patchedMain.indexOf("host.className='oc-cx-host-container");
     const sidebarStart = patchedMain.lastIndexOf("(()=>{var ", sidebarAt);
     // settings has its own IIFE: find the actual final return, not that closure.
@@ -431,6 +468,7 @@ if (asarIndex >= 0) {
     assert.equal(adapterSnapshot.servers[0]?.projects[0]?.worktree, "/native", "Read actual project data, not just mount an empty shell");
     assert.equal(adapterSnapshot.servers[0]?.sessions[0]?.id, "native-session", "Read history through the official context API shape");
     adapterDispose();
+    }
     const result = patched.read(assetsPath + routeName);
     assert.equal(result, patchRoute(route));
     checkTimelineBridge(result);

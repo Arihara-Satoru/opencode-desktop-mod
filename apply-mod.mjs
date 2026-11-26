@@ -41,6 +41,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { patchVoiceDesktopMain } from "./voice-patch.mjs";
 import { patchFileActionsRenderer } from "./file-actions-patch.mjs";
+import { patchInboxSidebar } from "./inbox-sidebar-patch.mjs";
 import { patchLongTextComposer } from "./long-text-patch.mjs";
 import { isModelPickerChunk, patchModelPicker } from "./model-picker-patch.mjs";
 import { resolvePanelSymbols, resolvePanelChunkImport } from "./bundle-symbols.mjs";
@@ -331,11 +332,15 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
     : /([a-zA-Z0-9_$]+=)([a-zA-Z0-9_$]+)\.sdk\.event\.listen\(([a-zA-Z0-9_$]+)=>\{/;
   out = out.replace(listenerPattern, (match, _assignment, _context, param) => match + skipBtwEvent(param));
 
-  // 4. Inject Codex-style sidebar with pinning into desktop vertical tabs
+  // 4. Prefer native Inbox when its grouping and navigation can be patched together.
+  const inboxSource = patchInboxSidebar(out, findInternalName(symbols.createSignal));
+  const nativeInbox = inboxSource !== out;
+  out = inboxSource;
+  // Keep the old Codex sidebar for older builds.
   const propPattern = /\{orientation:[`'"]vertical[`'"],(?:get highlightActive\(\)\{return [\w$]+\?\.\(\)\},)?(?:get sections\(\)\{return [\w$]+\?\.sections\},get tabFooter\(\)\{return [\w$]+\?\.tabFooter\},get tabLabel\(\)\{return [\w$]+\?\.tabLabel\},(?:get tabMenu\(\)\{return [\w$]+\?\.tabMenu\},get tabMuted\(\)\{return [\w$]+\?\.tabMuted\},get leading\(\)\{return [\w$]+\?\.leading\},)?)?tabs:([\w$]+),get currentTab\(\)\{return ([\w$]+)\(\)\},onNavigate:\([\w$]+,[\w$]+\)=>\{[\s\S]+?\.reorder\([\w$]+\)\}/;
   const propMatch = out.match(propPattern);
   let vTabsInjected = false;
-  if (propMatch) {
+  if (propMatch && !nativeInbox) {
     const prefixSlice = out.slice(Math.max(0, propMatch.index - 500), propMatch.index);
     let startMatch = [...prefixSlice.matchAll(/([a-zA-Z0-9_$]+)\(\),\(\(\)=>\{var\s+([a-zA-Z0-9_$]+)=([a-zA-Z0-9_$]+)\(\);return\s+([a-zA-Z0-9_$]+)\(\2,/g)].pop();
     // 2.2.6 selects inbox/projects/flat tabs inside a dedicated sidebar host.
@@ -406,7 +411,9 @@ function patchMainBundle(src, panelFileName, origPanelSrc, symbols) {
     }
   }
 
-  if (vTabsInjected) {
+  if (nativeInbox) {
+    console.log("[patch] 已为官方收件箱添加可折叠的目录分组。");
+  } else if (vTabsInjected) {
     // Capture at module scope: the vertical-tab component shadows A with its UI store.
     out = `const __oc_cx_onCleanup=${matchedCleanup};\n${out}`;
     console.log("[patch] 成功注入 Codex 侧边栏与置顶模块挂钩。");
