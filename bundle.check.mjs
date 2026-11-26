@@ -386,6 +386,41 @@ if (asarIndex >= 0) {
     if (main.includes('`sidebar.inbox.working.placement`')) {
       assert.ok(patchedMain.includes("__ocDirectories.groups()"), "Group the native Inbox on the 2.4.2 contract");
       assert.ok(patchedMain.includes("__ocDirectories.visible()"), "Keep shortcut order in sync with visible directory rows");
+      const inboxModel = patchedMain.match(/([\w$]+)=([\w$]+)\(\(\)=>\{let [\w$]+=([\w$]+)\.entries\(\),[\w$]+=new Map\(([\w$]+)\(([\w$]+)\.state\)\.map\(\([\w$]+,[\w$]+\)=>\[([\w$]+)\([\w$]+\),[\w$]+\]\)\),[^;]+;return\{needs:[^;]+?\}\}\)(?=,__ocWorkingRefs)/);
+      assert.ok(inboxModel, "Find the patched official Inbox model");
+      const [, model, memo, inbox, pinRefs, pins, pinKey] = inboxModel;
+      const archived = inboxModel[0].match(/filter\(entry=>entry.status===`working`&&!([\w$]+)\(entry\)\)\.toSorted\(([\w$]+)\)/);
+      const waiting = inboxModel[0].match(/\.filter\(([\w$]+)\)\.toSorted\(\([\w$]+,[\w$]+\)=>\([\w$]+\.since\?\?1\/0\)/);
+      const recentLimit = inboxModel[0].match(/([\w$]+)\.recentExpanded\?[\w$]+:[\w$]+\.filter\(\(entry,index\)=>index<([\w$]+)/);
+      assert.ok(archived && waiting && recentLimit, "Resolve the patched model's native dependencies");
+      const row = (key, updated, status = "ready", archived = false) => ({ key, status, session: { time: { updated, idle: updated, archived: archived ? 1 : undefined } } });
+      const pinned = row("pin", 4, "working");
+      const active = row("active", 2);
+      const entries = [pinned, row("newer", 3), active, row("older", 1), row("archived", 5, "working", true)];
+      const state = { recentExpanded: false, archivedExpanded: true };
+      const readModel = vm.runInNewContext(`const ${inboxModel[0]};${model}`, {
+        [memo]: fn => fn, [inbox]: { entries: () => entries, selected: item => item === active },
+        [pinRefs]: () => [pinned], [pins]: {}, [pinKey]: item => item.key,
+        [archived[1]]: item => Boolean(item.session.time.archived), [archived[2]]: () => 0,
+        [waiting[1]]: item => item.status === "input" || item.status === "approval",
+        [recentLimit[1]]: state, [recentLimit[2]]: 2,
+      });
+      const keys = items => items.map(item => item.key).join(",");
+      assert.equal(keys(readModel().recent), "pin,newer,active");
+      assert.equal(keys(readModel().working), "pin");
+      active.status = "working";
+      active.since = 100;
+      assert.equal(keys(readModel().recent), "pin,newer,active", "Starting work keeps the session in place above");
+      assert.equal(keys(readModel().working), "pin,active", "Working is an extra view, including pinned runs");
+      assert.equal(keys(readModel().archived), "archived");
+      active.status = "done";
+      assert.equal(keys(readModel().recent), "pin,newer,active");
+      assert.equal(keys(readModel().working), "pin", "Completion only drops the working copy");
+      entries.find(item => item.key === "older").status = "working";
+      assert.equal(keys(readModel().recent), "pin,newer,active,older", "A run beyond the recent limit remains visible above");
+      assert.equal(readModel().more, false, "Do not offer more if every session is already displayed");
+      assert.match(patchedMain, /return \[\.\.\.new Set\(\[.*?\.\.\.__ocDirectories\.visible\(\)/);
+      assert.equal([...patchedMain.matchAll(/rows:\(\)=>[\w$]+\(\(\)=>[\w$]+\(\)\.working,false,true\)/g)].length, 2);
       for (const pattern of [/onArchive:\(\)=>void [\w$]+\.archive\([\w$]+\(\)\)/, /onUnarchive:\(\)=>void [\w$]+\.unarchive\([\w$]+\(\)\)/, /\.plural\(`sidebar\.inbox\.elapsed\.days`,Math\.floor/]) {
         const native = main.match(pattern)?.[0];
         assert.ok(native && patchedMain.includes(native), `Keep native Inbox behavior: ${pattern}`);

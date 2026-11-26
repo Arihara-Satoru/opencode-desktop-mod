@@ -65,7 +65,7 @@ export function patchInboxSidebar(source, signal) {
   const rows = /let ([\w$]+)=([\w$]+)=>[\w$]+\([\w$]+,\{get each\(\)\{return \2\(\)\.map\([\w$]+=>[\w$]+\.key\)\},children:[\s\S]{0,300}?=>[\w$]+\(([\w$]+),\{ref:/;
   const recent = /\{id:`recent`,get label\(\)\{return [\w$]+\.t\(`sidebar\.inbox\.section\.recent`\)\},unlabeled:!0,get count\(\)\{return ([\w$]+)\(\)\.recent\.length\},rows:\(\)=>[\w$]+\(\(\)=>\1\(\)\.recent\),more:/;
   const sectionStart = /;return [\w$]+\([\w$]+,\{get loading\(\)\{return [\w$]+\.loading\(\)\},get announcement\(\)\{return [\w$]+\.text\},current:\{get count\(\)\{return [\w$]+\(\)\.current\.length\},rows:\(\)=>[\w$]+\(\(\)=>[\w$]+\(\)\.current\)\},sections:\[/;
-  const navigation = /\.current,\.\.\.([\w$]+)\.needs,\.\.\.\1\.recent,/;
+  const navigation = /return\[\.\.\.([\w$]+)\.current,\.\.\.\1\.needs,\.\.\.\1\.recent,([^;]+?)\]\.map\(([\w$]+)=>\3\.key\)/;
   const recentMatch = source.match(recent);
   if (!recentMatch || !signal) return source;
   const prefix = source.slice(Math.max(0, recentMatch.index - 12000), recentMatch.index);
@@ -81,12 +81,27 @@ export function patchInboxSidebar(source, signal) {
   const nav = inbox.match(navigation);
   const model = recentMatch[1];
   const modelMatch = inbox.match(new RegExp(`([\\w$]+)=([\\w$]+)=>[\\w$]+\\.pinned\\([\\w$]+\\(\\2\\)\\),${model.replaceAll("$", "\\$")}=([\\w$]+)\\(\\(\\)=>`));
-  if (!row || !section || !nav || !modelMatch) return source;
-
+  const settled = inbox.match(/([\w$]+)=([\w$]+)\.filter\(([\w$]+)=>\3\.status===`done`\|\|\3\.status===`failed`\|\|\3\.status===`ready`\)\.toSorted\(\(([\w$]+),([\w$]+)\)=>\(\5\.since\?\?0\)-\(\4\.since\?\?0\)\),([\w$]+)=\[\.\.\.([\w$]+),\.\.\.([\w$]+)\.recentExpanded\?\1:\1\.slice\(0,([\w$]+)\)\]/);
+  const working = inbox.match(/([\w$]+)=([\w$]+)\.filter\(([\w$]+)=>\3\.status===`working`\)\.toSorted\(([\w$]+)\)/);
+  const shown = inbox.match(/(=\[\.\.\.[\w$]+,\.\.\.([\w$]+)),\.\.\.([\w$]+)(,\.\.\.[\w$]+\.archivedExpanded\?)/);
+  const refs = row?.[0] && inbox.slice(row.index + row[0].length).match(/^([\w$]+)=>\{([\w$]+)\.set\(([\w$]+),\1\),([\w$]+)\(\(\)=>\2\.get\(\3\)===\1&&\2\.delete\(\3\)\)\}/);
+  if (!row || !section || !nav || !modelMatch || !settled || !working || !shown || !refs) return source;
+  const [, candidates, active, , , , recentList, pins, state, limit] = settled;
+  const [, workingList, workingActive, , compareWorking] = working;
+  const [, element, rowRefs, key, cleanup] = refs;
+  const allEntries = inbox.match(/\(\(\)=>\{let ([\w$]+)=[\w$]+\.entries\(\),[\w$]+=new Map\([\w$]+\([\w$]+\.state\)/)?.[1];
+  const archived = [...inbox.matchAll(/([\w$]+)=[\w$]+\.filter\(([\w$]+)=>!([\w$]+)\(\2\)\),/g)]
+    .find(match => match[1] === active)?.[3];
+  const revealMatch = inbox.match(/([\w$]+)\.get\(([\w$]+)\)\?\.scrollIntoView\(/);
+  const workingRows = new RegExp(`rows:\\(\\)=>${row[1].replaceAll("$", "\\$")}\\(\\(\\)=>${model.replaceAll("$", "\\$")}\\(\\)\\.working\\)`, "g");
   const cardStart = source.indexOf(`function ${row[3]}(`, end);
+  if (active !== workingActive || shown[2] !== recentList || shown[3] !== workingList || !allEntries || !archived ||
+    !revealMatch || revealMatch[1] !== rowRefs || !inbox.includes(`more:${candidates}.length>${limit}`) ||
+    cardStart < 0 || [...source.slice(offset, cardStart).matchAll(workingRows)].length !== 2) return source;
+
   const cardPrefix = source.slice(cardStart, cardStart + 8000);
   const cardMatch = cardPrefix.match(/^function [\w$]+\(([\w$]+)\)\{[\s\S]+?(?=\}+[\w$]+\(\[`focusin`,`keydown`,`click`\]\);)/);
-  if (cardStart < 0 || !cardMatch) return source;
+  if (!cardMatch) return source;
   const props = cardMatch[1];
   const card = cardMatch[0];
   const title = /var ([\w$]+)=[\w$]+\(\),([\w$]+)=\1\.firstChild,([\w$]+)=\2\.nextSibling;return/;
@@ -100,13 +115,23 @@ export function patchInboxSidebar(source, signal) {
     .replace('class:`absolute start-0 top-0 flex size-4 shrink-0`', `get class(){return ${props}.__ocDirectory?\`flex size-4 shrink-0\`:\`absolute start-0 top-0 flex size-4 shrink-0\`}`);
 
   const [renderRows, list] = row.slice(1, 3);
-  inbox = inbox.replace(row[0], row[0].replace(`=${list}=>`, `=(${list},__ocDirectory=false)=>`).replace("{ref:", "{__ocDirectory,ref:"));
-  inbox = inbox.replace(nav[0], nav[0].replace(`...${nav[1]}.recent`, "...__ocDirectories.visible()"));
+  // Keep running sessions in the main list even outside the recent cutoff.
+  // Sort the directory list by session activity, independent of the run timer.
+  inbox = inbox.replace(settled[0], `${candidates}=${active}.filter(entry=>[\`done\`,\`failed\`,\`ready\`,\`working\`].includes(entry.status))` +
+    `.toSorted((a,b)=>(b.session.time.idle??b.session.time.updated)-(a.session.time.idle??a.session.time.updated)),` +
+    `${recentList}=[...${pins},...${state}.recentExpanded?${candidates}:${candidates}.filter((entry,index)=>index<${limit}||entry.status===\`working\`)]`);
+  inbox = inbox.replace(working[0], `${workingList}=${allEntries}.filter(entry=>entry.status===\`working\`&&!${archived}(entry)).toSorted(${compareWorking})`);
+  inbox = inbox.replace(shown[0], shown[1] + shown[4]).replace(`more:${candidates}.length>${limit}`, `more:${candidates}.slice(${limit}).some(entry=>entry.status!==\`working\`)`);
+
+  inbox = inbox.replace(row[0], row[0].replace(`=${list}=>`, `=(${list},__ocDirectory=false,__ocWorkingView=false)=>`).replace("{ref:", "{__ocDirectory,ref:"));
+  inbox = inbox.replace(refs[0], `${element}=>{const refs=__ocWorkingView?__ocWorkingRefs:${rowRefs};refs.set(${key},${element});${cleanup}(()=>refs.get(${key})===${element}&&refs.delete(${key}))}`);
+  inbox = inbox.replace(revealMatch[0], `(${rowRefs}.get(${revealMatch[2]})??__ocWorkingRefs.get(${revealMatch[2]}))?.scrollIntoView(`);
+  inbox = inbox.replace(nav[0], `return [...new Set([...${nav[1]}.current,...${nav[1]}.needs,...__ocDirectories.visible(),${nav[2]}].map(${nav[3]}=>${nav[3]}.key))]`);
   // Navigation registers immediately, so initialize the controller before it;
   // the rows callback is only invoked later by the native section renderer.
   const modelEnd = inbox.match(/shown:[\w$]+\}\}\),[\w$]+=new Map;/);
   if (!modelEnd) return source;
-  inbox = inbox.replace(modelEnd[0], modelEnd[0].replace("),", `),__ocDirectories=__ocCreateInboxDirectories(()=>${model}().recent,${modelMatch[1]},(...args)=>${renderRows}(...args),${modelMatch[3]},${signal}),`));
+  inbox = inbox.replace(modelEnd[0], modelEnd[0].replace("),", `),__ocWorkingRefs=new Map,__ocDirectories=__ocCreateInboxDirectories(()=>${model}().recent,${modelMatch[1]},(...args)=>${renderRows}(...args),${modelMatch[3]},${signal}),`));
   // Keep native section object identities stable when directory membership changes.
   const sectionsAt = inbox.indexOf(section[0]) + section[0].length;
   const nativeSections = inbox.slice(sectionsAt, -1).replace(recentMatch[0],
@@ -115,5 +140,6 @@ export function patchInboxSidebar(source, signal) {
   const beforeReturn = sectionsAt - section[0].length;
   inbox = inbox.slice(0, beforeReturn) + `;const __ocNativeSections=[${nativeSections}];` +
     section[0].slice(1).replace("sections:[", "get sections(){return[...__ocNativeSections.slice(0,2),...__ocDirectories.groups(),...__ocNativeSections.slice(2)]}");
-  return `const __ocCreateInboxDirectories=${createInboxDirectories};\n` + source.slice(0, offset) + inbox + source.slice(end, cardStart) + styledCard + source.slice(cardStart + card.length);
+  const renderedInbox = (inbox + source.slice(end, cardStart)).replace(workingRows, match => `${match.slice(0, -1)},false,true)`);
+  return `const __ocCreateInboxDirectories=${createInboxDirectories};\n` + source.slice(0, offset) + renderedInbox + styledCard + source.slice(cardStart + card.length);
 }
