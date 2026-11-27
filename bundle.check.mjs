@@ -37,6 +37,25 @@ const patcher = fs.readFileSync(path.join(cwd, "apply-mod.mjs"), "utf8");
   assert.equal(mount().groups()[1].expanded, false, "Remember the directory collapse across mounts");
   repo.onToggle();
   assert.equal(inbox.visible().map(row => row.key).join(","), "pin,a,b,other,remote");
+
+  let draftTabs = [{ server: "remote", directory: "c:\\repo", draftID: "remote-draft" }];
+  const draftInbox = create(() => entries, row => row.key === "pin", (read, compact) => ({ read, compact }), memo, signal, {
+    list: () => draftTabs,
+    rows: read => ({ read }),
+    open: async target => { draftTabs = [{ ...target, draftID: "new-draft" }, ...draftTabs]; },
+  });
+  const [, localRepo, , remoteRepo] = draftInbox.groups();
+  assert.equal(remoteRepo.rows()[0].read()[0].draftID, "remote-draft", "Match drafts by server and normalized directory");
+  assert.equal(localRepo.rows()[0].read().length, 0);
+  localRepo.onToggle();
+  await localRepo.newSession();
+  assert.equal(localRepo.expanded, true, "Opening a new draft expands its directory");
+  assert.equal(localRepo.rows()[0].read()[0].draftID, "new-draft");
+  assert.equal(draftTabs[0].server, "local");
+  assert.equal(draftTabs[0].directory, "C:\\repo", "Pass the original directory path to the native draft action");
+  draftTabs.push({ server: "local", directory: "/new/project", draftID: "draft-only" });
+  const draftOnly = draftInbox.groups().find(group => group.label === "project");
+  assert.equal(draftOnly.count, 1, "Create a directory group even when it contains only a draft");
 }
 const eventIsolation = patcher.slice(patcher.indexOf("  // 3. Isolate ephemeral"), patcher.indexOf("  // 4. Prefer native Inbox"));
 for (const fixture of [
@@ -386,6 +405,28 @@ if (asarIndex >= 0) {
     if (main.includes('`sidebar.inbox.working.placement`')) {
       assert.ok(patchedMain.includes("__ocDirectories.groups()"), "Group the native Inbox on the 2.4.2 contract");
       assert.ok(patchedMain.includes("__ocDirectories.visible()"), "Keep shortcut order in sync with visible directory rows");
+      assert.match(patchedMain, /open:target=>[\w$]+\.newDraft\(target\)/, "Use the native draft action for directory creation");
+      assert.match(patchedMain, /label:\(\)=>[\w$]+\.t\(`command\.session\.new`\)/, "Resolve the localized label in the sidebar controller");
+      const headerMount = patchedMain.match(/([\w$]+)\(([\w$]+),__ocInboxDirectoryHeader\(([\w$]+)\(([\w$]+),\{get when\(\)\{return!([\w$]+)\.unlabeled\},get children\(\)\{return \3\(([\w$]+),\{[\s\S]{0,500}?\}\}\),\5,\1\),null\)/);
+      assert.ok(headerMount, "Mount the directory button without looking up translations in the row's DOM scope");
+      const [, insert, dom, component, show, section, heading] = headerMount;
+      const node = () => ({ children: [], append(...children) { this.children.push(...children); }, setAttribute(key, value) { this[key] = value; }, addEventListener(key, fn) { this[key] = fn; } });
+      const host = node();
+      let opened = 0;
+      const headerHelper = patchedMain.match(/__ocInboxDirectoryHeader=(function inboxDirectoryHeader\([\s\S]+?\n\});/)?.[1];
+      assert.ok(headerHelper);
+      vm.runInNewContext(`const __ocInboxDirectoryHeader=${headerHelper};${headerMount[0]}`, {
+        [insert]: (parent, child) => parent.append(child), [dom]: host,
+        [component]: (render, props) => render(props), [show]: props => props.when ? props.children : undefined,
+        [heading]: () => node(),
+        [section]: { label: "repo", newSessionLabel: "新建会话", async newSession() { opened++; } },
+        document: { createElement: node },
+      });
+      const button = host.children[0].children[1];
+      assert.equal(button["aria-label"], "新建会话 · repo");
+      button.click();
+      assert.equal(opened, 1);
+      assert.ok(!patchedMain.includes('id:`drafts`,get label(){return'), "Remove the standalone Drafts section in the sidebar");
       const inboxModel = patchedMain.match(/([\w$]+)=([\w$]+)\(\(\)=>\{let [\w$]+=([\w$]+)\.entries\(\),[\w$]+=new Map\(([\w$]+)\(([\w$]+)\.state\)\.map\(\([\w$]+,[\w$]+\)=>\[([\w$]+)\([\w$]+\),[\w$]+\]\)\),[^;]+;return\{needs:[^;]+?\}\}\)(?=,__ocWorkingRefs)/);
       assert.ok(inboxModel, "Find the patched official Inbox model");
       const [, model, memo, inbox, pinRefs, pins, pinKey] = inboxModel;

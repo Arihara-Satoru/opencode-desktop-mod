@@ -1,6 +1,6 @@
 // Group the native list, so its cards, archive, pins and commands keep using the
 // official stores. This function is embedded in the renderer bundle as-is.
-export function createInboxDirectories(recent, pinned, rows, memo, signal) {
+export function createInboxDirectories(recent, pinned, rows, memo, signal, drafts = {}) {
   const storageKey = "opencode-mod.inbox.collapsed-directories";
   let saved = [];
   try {
@@ -8,20 +8,35 @@ export function createInboxDirectories(recent, pinned, rows, memo, signal) {
     if (Array.isArray(value)) saved = value.filter(key => typeof key === "string");
   } catch { /* Storage can be disabled. */ }
   const [collapsed, setCollapsed] = signal(new Set(saved));
+  const saveCollapsed = next => {
+    setCollapsed(next);
+    try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* Optional persistence. */ }
+  };
   const grouped = memo(() => {
     const directories = new Map();
     const pins = [];
+    const directoryGroup = (server, directory) => {
+      const windows = /^[a-z]:[\\/]|^\\\\/i.test(directory);
+      const normalized = (windows ? directory.replaceAll("\\", "/") : directory).replace(/\/+$/, "") || "/";
+      const key = JSON.stringify([server, windows ? normalized.toLowerCase() : normalized]);
+      if (!directories.has(key)) {
+        directories.set(key, { server, directory, label: normalized.split("/").at(-1) || normalized, entries: [], drafts: [] });
+      }
+      return directories.get(key);
+    };
     for (const entry of recent()) {
       if (pinned(entry)) {
         pins.push(entry);
         continue;
       }
-      const path = entry.session.location.directory;
-      const windows = /^[a-z]:[\\/]|^\\\\/i.test(path);
-      const normalized = (windows ? path.replaceAll("\\", "/") : path).replace(/\/+$/, "") || "/";
-      const key = JSON.stringify([entry.server, windows ? normalized.toLowerCase() : normalized]);
-      if (!directories.has(key)) directories.set(key, { label: normalized.split("/").at(-1) || normalized, entries: [] });
-      directories.get(key).entries.push(entry);
+      directoryGroup(entry.server, entry.session.location.directory).entries.push(entry);
+    }
+    for (const entry of pins) {
+      const group = directoryGroup(entry.server, entry.session.location.directory);
+      group.hasPins = true;
+    }
+    for (const draft of drafts.list?.() ?? []) {
+      directoryGroup(draft.server, draft.directory).drafts.push(draft);
     }
     return { directories, pins };
   });
@@ -39,16 +54,29 @@ export function createInboxDirectories(recent, pinned, rows, memo, signal) {
       next.set(key, sections.get(key) ?? {
         id: `oc-directory-${++serial}`,
         get label() { return group()?.label ?? ""; },
-        get count() { return group()?.entries.length ?? 0; },
+        get count() {
+          const value = group();
+          return value ? value.entries.length + value.drafts.length || Number(value.hasPins && !!drafts.open) : 0;
+        },
         get expanded() { return !collapsed().has(key); },
-        rows: () => rows(() => group()?.entries ?? [], true),
+        rows: () => drafts.rows
+          ? [drafts.rows(() => group()?.drafts ?? []), rows(() => group()?.entries ?? [], true)]
+          : rows(() => group()?.entries ?? [], true),
+        get newSession() { return drafts.open ? open : undefined; },
+        get newSessionLabel() { return drafts.label?.(); },
         onToggle() {
           const next = new Set(collapsed());
           if (!next.delete(key)) next.add(key);
-          setCollapsed(next);
-          try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* Optional persistence. */ }
+          saveCollapsed(next);
         },
       });
+      async function open() {
+        const value = group();
+        if (!value) return;
+        await drafts.open({ server: value.server, directory: value.directory });
+        const next = new Set(collapsed());
+        if (next.delete(key)) saveCollapsed(next);
+      }
     }
     sections = next;
     return [pinnedSection, ...next.values()];
@@ -57,6 +85,24 @@ export function createInboxDirectories(recent, pinned, rows, memo, signal) {
     groups,
     visible: () => [...grouped().pins, ...[...grouped().directories].flatMap(([key, group]) => collapsed().has(key) ? [] : group.entries)],
   };
+}
+
+function inboxDirectoryHeader(header, section, insert) {
+  if (!section.newSession) return header;
+  const wrapper = document.createElement("div");
+  wrapper.className = "flex min-w-0 items-center";
+  const heading = document.createElement("div");
+  heading.className = "min-w-0 flex-1";
+  insert(heading, header);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "flex size-6 shrink-0 items-center justify-center rounded-[6px] text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover focus-visible:-outline-offset-2";
+  button.textContent = "+";
+  button.title = `${section.newSessionLabel} · ${section.label}`;
+  button.setAttribute("aria-label", button.title);
+  button.addEventListener("click", () => void section.newSession().catch(error => console.error("[inbox]", error)));
+  wrapper.append(heading, button);
+  return wrapper;
 }
 
 export function patchInboxSidebar(source, signal) {
@@ -99,6 +145,22 @@ export function patchInboxSidebar(source, signal) {
     !revealMatch || revealMatch[1] !== rowRefs || !inbox.includes(`more:${candidates}.length>${limit}`) ||
     cardStart < 0 || [...source.slice(offset, cardStart).matchAll(workingRows)].length !== 2) return source;
 
+  const draftsSection = inbox.match(/\{id:`drafts`,get label\(\)\{return ([\w$]+)\.t\(`sidebar\.inbox\.section\.drafts`\)\},get count\(\)\{return ([\w$]+)\(\)\.length\},rows:(\(\)=>[\w$]+\([\w$]+,\{get each\(\)\{return \2\(\)\},children:([\w$]+)=>[\w$]+\(([\w$]+),\{[\s\S]+?onOpen:\(\)=>([\w$]+)\.select\(\4\),onDiscard:\(\)=>[\w$]+\(\4\)\}\)\}\))\},(?=\{id:`needs`)/);
+  const draftsDecl = inbox.match(/;let ([\w$]+=[\w$]+=>[\w$]+\.state\([\w$]+,`prompt`,[\s\S]+?\.closeTab\([\w$]+\)\}),([\w$]+=([\w$]+)\(\(\)=>[\w$]+\(\)\.working\.find)/);
+  const beforePins = inbox.match(/;let [\w$]+=[\w$]+=>\(\{server:[\w$]+\.server,sessionId:[\w$]+\.session\.id\}\),/);
+  const nativeHeader = source.slice(end, cardStart).match(/([\w$]+)\(([\w$]+),([\w$]+\([\w$]+,\{get when\(\)\{return!([\w$]+)\.unlabeled\},get children\(\)\{return [\w$]+\([\w$]+,\{get id\(\)\{return`[^`]+`\},get label\(\)\{return \4\.label\},get expanded\(\)\{return \4\.expanded\},get shimmer\(\)\{return \4\.shimmer\},get onToggle\(\)\{return \4\.onToggle\}\}\)\}\}\)),null\)/);
+  if (!draftsSection || !draftsDecl || !beforePins || !nativeHeader) return source;
+  const [, language, draftList, renderDrafts, , draftCard, tabs] = draftsSection;
+  const draftStart = source.lastIndexOf(`function ${draftCard}(`, cardStart);
+  const nativeDraft = source.slice(draftStart, cardStart);
+  const draftProps = nativeDraft.match(/^function [\w$]+\(([\w$]+)\)/)?.[1];
+  const draftMetadata = nativeDraft.match(/,\(\(\)=>\{var [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\.firstChild;return [\w$]+\([\w$]+,\(\)=>[\w$]+\([\w$]+\.project\?\?\{worktree:[\w$]+\.directory\}\)\),[\w$]+\}\)\(\)(?=\])/);
+  if (!draftProps || !draftMetadata || !nativeDraft.includes('class:`group flex h-[54px]')) return source;
+  const styledDraft = nativeDraft
+    .replace('class:`group flex h-[54px]', `style:{height:"34px","justify-content":"center"},class:\`group flex h-[54px]`)
+    .replace(draftMetadata[0], "");
+  const draftRows = renderDrafts.replace("()=>", "list=>").replace(`return ${draftList}()`, "return list()");
+
   const cardPrefix = source.slice(cardStart, cardStart + 8000);
   const cardMatch = cardPrefix.match(/^function [\w$]+\(([\w$]+)\)\{[\s\S]+?(?=\}+[\w$]+\(\[`focusin`,`keydown`,`click`\]\);)/);
   if (!cardMatch) return source;
@@ -131,15 +193,19 @@ export function patchInboxSidebar(source, signal) {
   // the rows callback is only invoked later by the native section renderer.
   const modelEnd = inbox.match(/shown:[\w$]+\}\}\),[\w$]+=new Map;/);
   if (!modelEnd) return source;
-  inbox = inbox.replace(modelEnd[0], modelEnd[0].replace("),", `),__ocWorkingRefs=new Map,__ocDirectories=__ocCreateInboxDirectories(()=>${model}().recent,${modelMatch[1]},(...args)=>${renderRows}(...args),${modelMatch[3]},${signal}),`));
+  inbox = inbox.replace(modelEnd[0], modelEnd[0].replace("),", `),__ocWorkingRefs=new Map,__ocDirectories=__ocCreateInboxDirectories(()=>${model}().recent,${modelMatch[1]},(...args)=>${renderRows}(...args),${modelMatch[3]},${signal},{list:${draftList},rows:${draftRows},open:target=>${tabs}.newDraft(target),label:()=>${language}.t(\`command.session.new\`)}),`));
+  inbox = inbox.replace(draftsDecl[0], () => `;let ${draftsDecl[2]}`)
+    .replace(beforePins[0], () => `;let ${draftsDecl[1]}${beforePins[0]}`);
   // Keep native section object identities stable when directory membership changes.
   const sectionsAt = inbox.indexOf(section[0]) + section[0].length;
-  const nativeSections = inbox.slice(sectionsAt, -1).replace(recentMatch[0],
+  const nativeSections = inbox.slice(sectionsAt, -1).replace(draftsSection[0], "").replace(recentMatch[0],
     recentMatch[0].replace(`${model}().recent.length`, `Number(${model}().more)`)
       .replace(/rows:\(\)=>[\w$]+\(\(\)=>[\w$]+\(\)\.recent\)/, "rows:()=>null"));
   const beforeReturn = sectionsAt - section[0].length;
   inbox = inbox.slice(0, beforeReturn) + `;const __ocNativeSections=[${nativeSections}];` +
-    section[0].slice(1).replace("sections:[", "get sections(){return[...__ocNativeSections.slice(0,2),...__ocDirectories.groups(),...__ocNativeSections.slice(2)]}");
-  const renderedInbox = (inbox + source.slice(end, cardStart)).replace(workingRows, match => `${match.slice(0, -1)},false,true)`);
-  return `const __ocCreateInboxDirectories=${createInboxDirectories};\n` + source.slice(0, offset) + renderedInbox + styledCard + source.slice(cardStart + card.length);
+    section[0].slice(1).replace("sections:[", "get sections(){return[__ocNativeSections[0],...__ocDirectories.groups(),...__ocNativeSections.slice(1)]}");
+  const renderedInbox = (inbox + source.slice(end, draftStart))
+    .replace(workingRows, match => `${match.slice(0, -1)},false,true)`)
+    .replace(nativeHeader[0], () => `${nativeHeader[1]}(${nativeHeader[2]},__ocInboxDirectoryHeader(${nativeHeader[3]},${nativeHeader[4]},${nativeHeader[1]}),null)`);
+  return `const __ocCreateInboxDirectories=${createInboxDirectories},__ocInboxDirectoryHeader=${inboxDirectoryHeader};\n` + source.slice(0, offset) + renderedInbox + styledDraft + styledCard + source.slice(cardStart + card.length);
 }
